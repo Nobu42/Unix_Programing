@@ -33,7 +33,7 @@ This repository contains my personal exercises and implementations from the book
 - **Late Bloomer**: Touched a PC for the first time at age 42.
   42歳で生まれて初めてPCに触れる。
 - **Career Pivot**: Successfully transitioned from a professional Chef to the IT industry at age 47.
-  47歳で15年の板前修業に区切りをつけ、IT業界へ完全転身。
+  47歳で25年の板前修業に区切りをつけ、IT業界へ完全転身。
 - **Current Focus**: Deep diving into Linux Kernel internals and computer architecture.
   現在はLinuxカーネルの内部構造やコンピュータアーキテクチャを深く学習中。
 - **New Chapter**: Coding for the world from my new 2LDK home office.
