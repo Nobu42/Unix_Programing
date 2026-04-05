@@ -1,0 +1,12 @@
+# 実行ファイルを除外
+who/who1
+who/who2
+who/who3
+more/more01
+more/more02
+cp/cp1
+# オブジェクトファイルを除外
+*.o
+# エディタのバックアップ
+*~
+.swp

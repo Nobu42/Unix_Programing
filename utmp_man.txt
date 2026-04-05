@@ -1,0 +1,192 @@
+UTMP(5)                                    Linux Programmer's Manual                                   UTMP(5)
+
+名
+       utmp, wtmp - ログイン記録
+
+書
+       #include <utmp.h>
+
+説
+       utmp  ファイルを見ることで、現在誰がシステムを使っているかという情報 が得られる。ただすべてのプログラム
+       が utmp ファイルを 更新しているわけではないので、実際にはそれ以上のユーザーが  システムを使っている可能
+       性がある。
+
+       警
+       類されるユーザーに対して  書き込み可能にしてはならない。   ファイルの所有者とグループオーナー以外のユー
+       ザーに対して utmp ファイルを書き込み可能な状態にしておくと、 システムのログファイルを偽造されたり、シス
+       テムファイルの 改ざんを受けるといったリスクを犯すことになる。
+
+       このファイルは utmp 構造体の繰り返しで構成される。 この構造体は  <utmp.h>  で以下のように定義されている
+       (ここに記述してあるのは幾つかの大まかな定義のみで、  詳細は libc のバージョンにより変わることに注意が必
+       要である)。
+
+           /* Values for ut_type field, below */
+
+           #define EMPTY         0 /* Record does not contain valid info
+                                      (formerly known as UT_UNKNOWN on Linux) */
+           #define RUN_LVL       1 /* Change in system run-level (see
+                                      init(8)) */
+           #define BOOT_TIME     2 /* Time of system boot (in ut_tv) */
+           #define NEW_TIME      3 /* Time after system clock change
+                                      (in ut_tv) */
+           #define OLD_TIME      4 /* Time before system clock change
+                                      (in ut_tv) */
+           #define INIT_PROCESS  5 /* Process spawned by init(8) */
+           #define LOGIN_PROCESS 6 /* Session leader process for user login */
+           #define USER_PROCESS  7 /* Normal process */
+           #define DEAD_PROCESS  8 /* Terminated process */
+           #define ACCOUNTING    9 /* Not implemented */
+
+           #define UT_LINESIZE      32
+           #define UT_NAMESIZE      32
+           #define UT_HOSTSIZE     256
+
+           struct exit_status {              /* Type for ut_exit, below */
+               short int e_termination;      /* Process termination status */
+               short int e_exit;             /* Process exit status */
+           };
+
+           struct utmp {
+               short   ut_type;              /* Type of record */
+               pid_t   ut_pid;               /* PID of login process */
+               char    ut_line[UT_LINESIZE]; /* Device name of tty - "/dev/" */
+               char    ut_id[4];             /* Terminal name suffix,
+                                                or inittab(5) ID */
+               char    ut_user[UT_NAMESIZE]; /* Username */
+               char    ut_host[UT_HOSTSIZE]; /* Hostname for remote login, or
+                                                kernel version for run-level
+                                                messages */
+               struct  exit_status ut_exit;  /* Exit status of a process
+                                                marked as DEAD_PROCESS; not
+                                                used by Linux init(1) */
+               /* ut_session と ut_tv フィールドは、32ビットでコンパイルされた場合と
+                  64ビットでコンパイルされた場合で同じサイズでなければならない。
+                  こうすることで、32ビットと64ビットのアプリケーションで、
+                  データファイルと共有メモリーを共有することができるようになる。 */
+           #if __WORDSIZE == 64 && defined __WORDSIZE_COMPAT32
+               int32_t ut_session;           /* Session ID (getsid(2)),
+                                                used for windowing */
+               struct {
+                   int32_t tv_sec;           /* Seconds */
+                   int32_t tv_usec;          /* Microseconds */
+               } ut_tv;                      /* Time entry was made */
+           #else
+                long   ut_session;           /* Session ID */
+                struct timeval ut_tv;        /* Time entry was made */
+           #endif
+
+               int32_t ut_addr_v6[4];        /* Internet address of remote
+                                                host; IPv4 address uses
+                                                just ut_addr_v6[0] */
+               char __unused[20];            /* Reserved for future use */
+           };
+
+           /* Backward compatibility hacks */
+           #define ut_name ut_user
+           #ifndef _NO_UT_TIME
+           #define ut_time ut_tv.tv_sec
+           #endif
+           #define ut_xtime ut_tv.tv_sec
+           #define ut_addr ut_addr_v6[0]
+
+       この構造体からユーザーの使っている端末のスペシャルファイル名、 ユーザーのログイン名、  (time(2)  形式で
+       の)ログイン時刻がわかる。文字列フィールドは、      フィールドの長さより文字列が短い場合には、ヌルバイト
+       ('\0') によって終端される。
+
+       最初のエントリーは init(1)  コマンドが inittab(5)  を処理することで作られる。  あるエントリーを処理する
+       前に、 init(1)  は ut_type を DEAD_PROCESS に初期化する。 レコードの ut_type が DEAD_PROCESS と RUN_LVL
+       のいずれでもなく、 かつ PID が ut_pid であるプロセスがいない場合は、ut_user, ut_host, ut_time  をヌルバ
+       イトでクリアして初期化を行う。  必要な ut_id を持つ空のレコードを見つけられなかった場合、 init(1)  は新
+       しいレコードを作る。inittab から  ut_id  を設定し、  ut_pid  および  ut_time  を現在値に、  ut_type  を
+       INIT_PROCESS に設定する。
+
+       mingetty(8)   (または  agetty(8))   は  pid  でエントリーを特定し、 ut_type を LOGIN_PROCESS に変更し、
+       ut_time  を更新し、ut_lineを設定した後、接続が確立されるのを待つ。  login(1)   はユーザー認証が終了する
+       と、  ut_type  を  USER_PROCESS に変更し、 ut_time を更新し、ut_host と ut_addrを設定する。 mingetty(8)
+       (または agetty(8))  と login(1)  により異なるが、 ut_pid の代わりに ut_line  を使ってレコードの特定が行
+       われることもある (ut_pid を使う方が望ましい) 。
+
+       init(1)   はプロセスの終了を検出した場合、  ut_pid  をキーとして utmp のエントリーを特定し、 ut_type を
+       DEAD_PROCESS に設定し、 ut_user, ut_host, ut_time をヌルバイトでクリアする。
+
+       xterm(1)  コマンドや他の端末エミュレータは 直接 USER_PROCESS のレコードを作り、  端末名のサフィックス文
+       字列   (/dev/[pt]ty   に続く文字列)    を使って   ut_id  の値を生成する。  この  id  を持つエントリーが
+       DEAD_PROCESS であった場合には再利用し、 それ以外の場合には新しいエントリーが作られる。 可能な場合にはプ
+       ロセス終了時に DEAD_PROCESS と設定し、 さらに ut_line, ut_time, ut_user, ut_host をヌルバイトでクリアす
+       ることが奨励されている。
+
+       telnetd(8)  は  LOGIN_PROCESS  を設定するだけでよく、  残りの処理は通常通り  login(1)  に任せればよい。
+       telnet のセッションが終了した後、前述のように telnetd(8)  が utmp のエントリーを初期化する。
+
+       wtmp  ファイルには、すべてのログインとログアウトが記録される。 そのフォーマットは、ログアウト済の端末で
+       ユーザー名がヌルとなること以外は utmp とまったく同じである。 ユーザー名が shutdown もしくは reboot であ
+       る 端末名 ~ はシステムの停止 (shutdown) または再起動 (reboot)  を意味する。またその端末名が | と } の対
+       は date(1) コマンドで変更した新／旧のシステム時刻を記録している。 wtmp ファイルは login(1), init(1)  や
+       いくつかのバージョンの getty(8)  (mingetty(8)  または agetty(8))  により管理されている。 これらのプログ
+       ラムはどれもファイルを新たに作成しないので、 ファイルを削除することで情報の記録 (record-keeping) を止め
+       ることができる。
+
+フ
+       /var/run/utmp
+       /var/log/wtmp
+
+準
+       POSIX.1  では、  utmp  構造体ではなく、  utmpx  構造体を規定している。  utmpx  構造体で規定されているの
+       は、フィールド ut_type, ut_pid,  ut_line,  ut_id,  ut_user,  ut_tv  である。  POSIX.1  では、フィールド
+       ut_line と ut_user の長さは規定されていない。
+
+       Linux では、 utmpx 構造体の定義は utmp 構造体と同じである。
+
+   過
+       Linux での utmp のエントリーは v7/BSD や System V のいずれにも準拠しておらず、 その両方が混在したもので
+       ある。
+
+       v7/BSD ではより少しの項目しかない; もっとも重要なことは、ut_type が無いことである。 そのため v7/BSD  系
+       のプログラムでは (たとえば) 死んだ状態のエントリーや ログイン状態のエントリーまで表示されてしまうことに
+       なった。 さらにセッション用のスロットを割り当てるための設定ファイルがない。 BSD  に設定ファイルがあるの
+       は ut_id がないからである。
+
+       Linux (System V 系)では、設定ファイルを必要とせず セッション用のスロットを割り当てるので、一旦設定 され
+       てしまうとレコードの ut_id は決して変更されない。 ut_id をクリアすると競合状態におちいり、 utmp  のエン
+       トリーを壊したり、潜在的なセキュリティホールになる可能性がある。 上述のフィールドをヌルバイトで埋めてク
+       リアしておくのは、 System  V  での取り決めでは必要とはされていないが、  BSD  での取り決めを前提としてい
+       て、かつ  utmp を更新しない多くのプログラムが 動作するようにするためである。 Linux ではここまで記述して
+       きたように、行内容の表示は BSD の慣例に従っている。
+
+       UT_UNKNOWN は Linux で作られたもののようである。 System V には ut_host も ut_addr_v6 も存在しない。
+
+注
+       ファイルを削除することで utmp への記録を止められる 他の様々なシステムとは違い、Linux では utmp ファイル
+       を必ずおいて  おく必要がある。 who(1)  コマンドが機能しないようにしたい場合には、 utmp ファイルの全ユー
+       ザーに対する読み取り許可を設定しないようにする。
+
+       ファイルのフォーマットはマシンに依存するので、ファイルが作られた マシンもしくは同一アーキテクチャーのマ
+       シン上でのみ処理することを推奨する。
+
+       注意すべき点としては、 biarch なプラットフォーム、つまり 32ビットと 64ビットの両方の アプリケーションを
+       実行できるシステム (x86-64, ppc64, s390x など) では、 ut_tv のサイズは 32ビットモードと  64ビットモード
+       で同じである。  ut_session と ut_time も、存在する場合には同様に同じサイズ である。これにより、32ビット
+       アプリケーションと 64ビットアプリケーション  の間でデータファイルと共有メモリーを共有することが可能にな
+       る。  そのためには、 ut_session を int32_t 型に、 ut_tv を 2つの int32_t 型のフィールド tv_sec, tv_usec
+       を持つ構造体に変更すればよい ut_tv は struct timeval と同じサイズとは限らないので、
+
+           gettimeofday((struct timeval *) &ut.ut_tv, NULL);
+
+       のような呼び出しをするのではなく、 以下のように各フィールドを設定する方法が推奨される:
+
+           struct utmp ut;
+           struct timeval tv;
+
+           gettimeofday(&tv, NULL);
+           ut.ut_tv.tv_sec = tv.tv_sec;
+           ut.ut_tv.tv_usec = tv.tv_usec;
+
+関
+       ac(1), date(1), last(1), login(1), utmpdump(1), who(1), getutent(3), getutmp(3),  login(3),  logout(3),
+       logwtmp(3), updwtmp(3), init(1)
+
+こ
+       この man ページは Linux man-pages プロジェクトのリリース 3.79 の一部 である。プロジェクトの説明とバグ報
+       告に関する情報は http://www.kernel.org/doc/man-pages/ に書かれている。
+
+Linux                                             2014-08-19                                           UTMP(5)
