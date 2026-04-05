@@ -11,8 +11,8 @@ This repository contains my personal exercises and implementations from the book
 - **Automated Build Environment**: Configured `Makefile` to automatically compile files by simply placing them in a new directory and running `make "filename"`.
 - **効率的なビルド環境**: 新しいディレクトリを作成して Makefile を配置するだけで、`make "ファイル名"` で即座にコンパイルできる環境を構築しました。
 
-- **Buffered I/O Library**: Implemented a custom library (`utmplib`) to improve I/O performance by reducing system calls.
-- **バッファリング版ライブラリ**: システムコールの回数を減らし、パフォーマンスを向上させる共通ライブラリ（`utmplib`）を自作し、各ツールに適用しました。
+- **Buffered I/O Library**: Placed a common library (utmplib) in the common/ directory to improve I/O performance by reducing system calls. (Planning to add more headers sequentially.)
+- **バッファリング版ライブラリ**: システムコールの回数を減らし、パフォーマンスを向上させる共通ライブラリ（`utmplib`）をcommonディレクトリに配置しています。（順次ヘッダ追加予定）
 
 ## 📁 Directory Structure / 構成
 
