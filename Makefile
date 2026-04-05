@@ -24,8 +24,8 @@ SUBDIRS := $(filter-out common, $(subst /,,$(wildcard */)))
 # "make" と打つと、自動でリストアップされた全ディレクトリを処理しに行きます。
 all: $(SUBDIRS)
 
-# $(SUBDIRS): ここが Make の面白いところです。
-# 変数の中身（cp more who）がそれぞれ「ターゲット」になります。
+# $(SUBDIRS): ここが Make の面白いところなのかな。
+# 変数の中身（cp more who）がそれぞれ「ターゲット」になる。
 $(SUBDIRS):
 	# $(MAKE): make コマンド自身を呼び出します。
 	# -C $@  : "-C" は Change directory の略。
