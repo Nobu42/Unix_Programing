@@ -56,10 +56,11 @@ OSおよびコンパイラのバージョン情報は以下の通りです。
 ```text
 ~/work/Unix_Programing/
 ├── common/        # 共通ライブラリ (utmplib等)
-├── ls/            # 第3章：lsコマンドの実装
-├── who/           # 第2章：whoコマンドの実装
 ├── more/          # 第1章：moreコマンドの実装
+├── who/           # 第2章：whoコマンドの実装（logout.cを含む）
+├── ls/            # 第3章：lsコマンド、stat構造体の学習
+├── pwd/           # 第4章：pwdコマンドの実装（iノードと再帰の学習）
 ├── cp/            # ファイルコピーの実装
-├── logout/        # ログアウト処理の実装
+├── shakyo/        # コード写経用ワークスペース
 ├── ENVIRONMENT.md # 本ファイル
 └── study.md       # 学習ログとロードマップ
