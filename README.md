@@ -6,7 +6,7 @@
 
 **※ 読了まで毎日更新中**
 
-##  学習ログと環境構成
+##  学習記録と環境構成
 - **[UNDERSTANDING_OS.md](./UNDERSTANDING_OS.md)**：OSの役割、リソース管理、Unix哲学に関する考察まとめ
 - **[ENVIRONMENT.md](./ENVIRONMENT.md)**：コンパイル環境および検証用OSの構成詳細
 
