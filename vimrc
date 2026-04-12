@@ -103,4 +103,4 @@ iabbr _sh #!/bin/bash
 iabbr _py #!/usr/bin/env python3
 
 " main関数の展開
-inoremap ;;m int main(int argc, char *argv[])<CR>{<CR>return 0;<CR>}<Esc>O
+inoremap ;;m int main(int ac, char *av[])<CR>{<CR>return 0;<CR>}<Esc>O
