@@ -12,8 +12,9 @@
 本書（『Unix/Linuxプログラミング理論と実践』）のサンプルプログラムをベースに、独自の機能追加や学習用のコメント追記を行っています。
 
 ### Credits
-- Original source code from: [Unix/Linuxプログラミング理論と実践]
-- Exercises and modifications implemented by Nobu42
+- Original source code from: [Unix/Linuxプログラミング理論と実践](https://www.kadokawa.co.jp/product/200802000527/)
+- Exercises and modifications implemented by [Nobu42](https://github.com/Nobu42)
+- ※ 本リポジトリは個人の学習記録であり、サンプルコードの著作権は原著者に帰属します。
 
 名著『Unix/Linuxプログラミング理論と実践』を通した、OS内部構造の検証記録リポジトリです。
 「OSの裏側で何が起きているのか」を、C言語のソースコードとシステムコールを通して探求しています。
