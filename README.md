@@ -1,9 +1,24 @@
 # Unix/Linux システムプログラミング
 
+## Reference
+このリポジトリのコードは、以下の書籍を参考に学習・実装したものです。
+
+- **書籍名**: Unix/Linuxプログラミング理論と実践
+- **著者**: Bruce Molay
+- **訳者**: 長尾 高弘
+- **出版社**: アスキー・メディアワークス 2008年4月22日発売)
+
+## About this repository
+本書（『Unix/Linuxプログラミング理論と実践』）のサンプルプログラムをベースに、独自の機能追加や学習用のコメント追記を行っています。
+
+### Credits
+- Original source code from: [Unix/Linuxプログラミング理論と実践]
+- Exercises and modifications implemented by Nobu42
+
 名著『Unix/Linuxプログラミング理論と実践』を通した、OS内部構造の検証記録リポジトリです。
 「OSの裏側で何が起きているのか」を、C言語のソースコードとシステムコールを通して探求しています。
 
-**※ 読了・完遂まで毎日更新中**
+**※ 読了・完遂まで随時更新中**
 
 ## 学習リソースとガイドライン
 - **[DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md )**：【重要】標準コマンド再実装のための実装プロセス・ガイド
