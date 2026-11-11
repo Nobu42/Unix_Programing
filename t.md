@@ -1,127 +1,200 @@
-# Redis更新後のCloudFormationロールバック：Export参照エラーの調査と対処
+# Redis 7.1更新後のCloudFormation整合化方針
+確認日：2026年11月12日
 
-作成日・公式資料確認日：2026年11月12日  
-対象：2026年11月11日に発生したと報告されたRedis OSS更新後のCloudFormation整合化失敗  
-用途：リーダおよび現場Copilotとの原因確認・対処方針検討
+## 1. 今回採用を勧める方法
 
-## 1. 現時点の結論
+稼働中のRedis 7.1と、現在使用しているAWS提供のデフォルトパラメータグループを維持する。
 
-**報告内容は「他スタックがImport中のExport値を、パラメータグループの置換に伴って変更・削除しようとして拒否された」というCloudFormationの制約と整合する。** ただし、エラー原文・失敗イベント・実テンプレートが未提示なので、発生原因を確定した扱いにはしない。
+旧カスタムパラメータグループとExportは変更せず、先にRedis本体側のCloudFormation定義を実環境に合わせる。旧グループとExportの整理は、依存関係を解消した後の別作業に分ける。
 
-今回区別する必要があるのは次の2種類の「使用中」。
+これはAWS公式の制約・解決手順を踏まえた、今回の構成に対する提案である。AWSがこの個別構成について更新成功や無停止を保証しているという意味ではない。
 
-| 種類 | 何が使用中か | 解除・変更に必要な条件 |
-|---|---|---|
-| CloudFormationのExport／Import依存 | 別スタックの`Fn::ImportValue`がExportを参照している | 当該Export値の変更・削除前に、すべてのImport参照を解消する。[S01][S02] |
-| ElastiCacheのグループ関連付け | キャッシュクラスターがパラメータグループを実際に使用している | グループを削除するには、どのキャッシュクラスターにも関連付いていない必要がある。[S05] |
+前提条件：
+- 現在のデフォルトパラメータグループを継続利用することが、現場の運用方針として認められる。
+- 独自パラメータグループを使うことが必須ではない。
+- 現在の実環境と、親・子テンプレートの参照関係を確認してから実施する。
 
-**Redisの実環境をデフォルトの7系グループへ切り替えても、それだけでCloudFormationの`Fn::ImportValue`定義が消えるわけではない。** 実環境の関連付けとテンプレートの参照関係を別々に確認する。
+## 2. 現場から共有された状況
 
-## 2. 担当者から共有された事実
+以下はAWS公式資料ではなく、現場の状況として共有された情報。
 
-- Redis OSSの6.2系から7.1系へのメジャーバージョンアップは、ElastiCacheのWebコンソールから実施し、成功したと報告されている。
-- 更新後はAWS提供のクラスターモード有効用デフォルトパラメータグループを使用しているとの説明。正確な物理名は未提示。
-- CloudFormationはルートスタックと子スタックからなるネスト構成。子にレプリケーショングループとパラメータグループがある。
-- CloudFormationで定義していたカスタムグループの設定は、`cluster-enabled = yes`のみとの説明。
-- 親側のエンジンバージョンを`7.1`、パラメータグループファミリーを`redis7`へ変更した。
-- 変更セットでレプリケーショングループは`Replacement: False`、パラメータグループは`Replacement: True`。Remove／Deleteに関する表示もあった。
-- 変更セットを実行するとCloudFormationのロールバックが発生した。
-- パラメータグループ名に関係するExport／Import参照があり、参照中のため変更等ができないという趣旨のエラーだった。
+- Redisの6.2.6から7.1.0への更新は、Webコンソールから実施して成功した。
+- 現在は、クラスターモード有効のAWS提供デフォルトパラメータグループを使用している。
+- CloudFormationは、ルートスタックと、Redis本体・パラメータグループの子スタックで構成されている。
+- 旧パラメータグループ名はExportされ、別のスタックからImportされている。
+- 親テンプレートでEngineVersionとパラメータグループFamilyを変更したところ、パラメータグループの置換が計画された。
+- 更新を実行すると、Exportが使用中である旨のエラーが発生し、CloudFormationがロールバックした。
 
-共有内容はAWSの出力と未突合。RemoveとDeleteがどの列・論理IDに表示されたか、ロールバックの最終ステータスも未確認。
+エラー全文と実際のテンプレートは本資料では未確認。そのため、失敗原因の最終確定にはCloudFormationイベントとの照合が必要。
 
-## 3. AWS公式仕様と、今回の原因の見立て
+## 3. この方法を選んだ根拠
 
-### 3.1 ImportされているExport値は変更・削除できない【公式仕様】
+### 根拠① ImportされているExport値は変更できない
 
-AWSは、他スタックがImportしている出力値を変更したり、Export元スタックを削除したりできないと説明している。先にすべてのImportを除去する必要がある。[S01][S02]
+AWS公式では、別スタックにImportされている間、Export値の変更やExport元スタックの削除はできないと説明されている。
 
-公式Knowledge Centerにも、次のエラーへの対処が掲載されている。
+先にすべてのImportを解除する必要がある。
 
-> Export EXPORT_NAME cannot be updated as it is in use by STACK_NAME
+したがって、今回の対象スタックが旧ExportをImportしている状態で、旧パラメータグループを置換してExport値を変更する進め方は避ける。
 
-その解説では、Import元の特定、Import側テンプレートの参照置換、Import側の更新を先に行う流れが示されている。[S03]
+参考：AWS CloudFormation「Fn::ImportValue」
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-importvalue.html
 
-なお、禁止されるのは参照中のExport値の変更・削除等であり、Exportを持つスタックのすべての更新が常に禁止されるという意味ではない。
+### 根拠② AWS公式にも「Import側を先に更新する」解決手順がある
 
-### 3.2 パラメータグループのFamily変更は置換【公式仕様】
+AWS Knowledge Centerには、次のエラーの解決手順がある。
 
-`AWS::ElastiCache::ParameterGroup`の`CacheParameterGroupFamily`変更は`Replacement`。同リソースの`Ref`はパラメータグループのリソース名を返す。[S04]
+「Export EXPORT_NAME cannot be updated as it is in use by STACK_NAME」
 
-一般的な置換では、新しい物理リソースを作成し、依存先の参照を変更し、旧リソースを削除する。これは今回の実行成功や、Export制約を自動回避できるという保証ではない。[S06]
+記事では、Importしているスタックを特定し、そのテンプレートのImportValueを出力実値に置き換えて更新した後、Export側を変更・削除する流れを説明している。
 
-### 3.3 今回想定される失敗経路【共有内容からの推論】
+今回も、この「Import側を先に更新する」という順序を採用する。
 
-以下は、Exportしている値がカスタムグループの`Ref`等である場合の見立て。
+ただし、記事の例は既存Exportの実値への置き換えである。
+今回、Redis本体の設定を現在使用中のRedis 7用デフォルトグループ名へ合わせる部分は、稼働状態を維持するための個別提案であり、記事が直接指定しているものではない。
 
-1. 親から渡すFamilyを`redis6.x`から`redis7`へ変更した。
-2. 子のカスタムパラメータグループが置換対象になった。
-3. 置換によって、Exportするグループの物理名を変更する必要が生じた。リソース定義や出力の除去があればExport削除となる場合もある。
-4. 別スタックの`Fn::ImportValue`が旧Exportを参照したままだった。
-5. CloudFormationがExport変更・削除を拒否し、更新が失敗した。
+旧Exportの値であるRedis 6用グループ名を、そのままRedis 7.1本体へ指定し直す手順ではない。
 
-**ルートから子をまとめて更新しても、参照中Exportを変更できない制約はなくならない。** `DependsOn`による順序指定だけを、Import解消の代替にしない。[S01][S02]
+参考：AWS Knowledge Center「Exportが使用中で更新できない場合の解決」
+https://repost.aws/knowledge-center/cloudformation-stack-export-name-error
 
-エラー原文が3.1の趣旨なら、この経路と一致する。一方、原文がElastiCacheのグループ使用中エラーなら、物理リソースの関連付けを調査する。両方が存在する場合もある。
+### 根拠③ パラメータグループFamilyの変更は置換になる
 
-## 4. 対処前に保存・確認する情報
+AWS::ElastiCache::ParameterGroupのCacheParameterGroupFamilyは、変更時にReplacementが必要なプロパティである。
 
-### 4.1 まず現在の状態を確認する
+そのため、旧グループのFamilyをredis6.xからredis7へ変更する操作を、今回の整合化と同時に行わない。
 
-| 確認対象 | 記録する内容・目的 |
-|---|---|
-| ルートと全子スタック | 最終ステータス。`UPDATE_ROLLBACK_COMPLETE`と`UPDATE_ROLLBACK_FAILED`を区別する。 |
-| 失敗イベント | 最初の直接原因となった失敗の時刻、論理ID、物理ID、`ResourceStatusReason`全文。後続のキャンセル表示だけで原因を判断しない。 |
-| Redis実環境 | 現在のエンジンバージョン、適用グループの物理名、全ノードの状態、パラメータ適用状態、保留中の変更。 |
-| CloudFormationの保存済み定義 | ルート・子のテンプレート、入力パラメータ、出力、物理ID。ローカルの変更済みファイルと区別する。 |
-| 失敗した変更セット | 各子の`ResourceType`、`Action`、`Replacement`、`PolicyAction`、変更前後のプロパティ。 |
+旧グループを残すのは依存関係を維持するためであり、Redis 7.1へ旧グループを適用するためではない。
 
-**CloudFormationのロールバックは、先にコンソールで成功したRedis更新が6.2へ戻ったことを意味しない。** Redis側の状態は必ず実環境で確認する。今回のロールバック中に何が試行・適用されたかもイベントと実設定で確認する。
+参考：AWS CloudFormation「AWS::ElastiCache::ParameterGroup」
+確認箇所：CacheParameterGroupFamily → Update requires: Replacement
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-parametergroup.html
 
-`UPDATE_ROLLBACK_FAILED`の場合、通常の再更新を始めない。失敗原因を確認し、現場の復旧手順に従って状態回復を検討する。リソーススキップを伴うロールバック続行ではテンプレートと実環境が不一致になることがあるため、本資料から機械的に実行しない。[S11]
+### 根拠④ Redis 7にはクラスターモード有効用のデフォルトグループがある
 
-### 4.2 Export／Importを確認する
+AWS公式では、Redis OSS 7のデフォルトグループを次のように区別している。
 
-1. CloudFormationコンソールで東京リージョンの「エクスポート」を開く。
-2. エラーに出たExport名を選び、Export元スタック・Export値・Import側スタックを保存する。
-3. 各Import側のテンプレートで、当該Exportを参照する`Fn::ImportValue`／`!ImportValue`を特定する。
-4. Redis本体以外の参照元も含める。エラーに示されたスタック1つだけで全参照元と決めつけない。
-5. Exportの`Value`が何を返すか確認する。特に旧グループの`Ref`か、固定文字列かを区別する。
+- default.redis7：クラスターモード無効用
+- default.redis7.cluster.on：クラスターモード有効用
 
-公式に案内されている読み取りAPIは`ListExports`と`ListImports`。`ListImports`ではExport名を指定して参照中のスタックを調べられる。[S01][S12]
+ただし、実環境で使用中の名前はコンソール等で確認し、その正確な値をテンプレートへ反映する。名前を推測して設定しない。
 
-### 4.3 物理リソースの関連付けも別に確認する
+独自設定がcluster-enabled=yesのみという説明だけで、その他の設定まで完全に同一と断定しない。
 
-- 現在のRedisが参照するデフォルトグループの正確な物理名。
-- 旧カスタムグループを使用している他のキャッシュクラスターの有無。
-- 失敗した更新で新規作成された7系カスタムグループが残っているか。
-- `cluster-enabled`以外に差分がないという共有内容を、実設定・テンプレート・グループ間の比較で確認する。
+参考：Amazon ElastiCache「Engine specific parameters」
+確認箇所：Redis OSS 7 parameter changes
+https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ParameterGroups.Engine.html
 
-`ListImports`が空であることは、キャッシュクラスターの関連付けがないことの証明ではない。逆に、Redisが旧グループを使っていなくてもImport依存は残り得る。
+## 4. 段階的な進め方
 
-## 5. 対処案A：現在のデフォルト7系グループを使い続ける
+### 段階1：旧パラメータグループとExportを維持する
 
-**今回の実環境に合わせるための候補。AWSがこの現場に指定した対処ではなく、公式のImport解消手順とデフォルトグループ仕様を組み合わせた案。** デフォルト利用を最終構成としてよいか、まずリーダと決める。
+- 旧パラメータグループのFamilyはredis6.xのままにする。
+- 旧パラメータグループの論理IDを変更しない。
+- 旧Exportの名前・値を変更しない。
+- 旧パラメータグループを定義している子スタックを削除しない。
 
-AWSが示すRedis OSS 7のクラスターモード有効用デフォルトグループは`default.redis7.cluster.on`。デフォルトグループ自体は変更・削除できない。[S07][S08]
+この段階では、旧グループの置換・削除を計画しない。
 
-### A-1. 参照元を先に更新する
+### 段階2：対象Redis本体の定義を実環境に合わせる
 
-1. Redis実環境が7.1系で、実際に使用しているグループが`default.redis7.cluster.on`であることを確認する。名前が異なる場合は、この前提で進めない。
-2. **旧パラメータグループ子スタックのFamily・リソース・Export名・Export値を、この段階では変更しない。** 親で`redis7`へ変更した値をそのまま渡して、旧グループを置換しないようにする。
-3. 旧ExportのImport側で、当該`Fn::ImportValue`を除去する。Redisの`CacheParameterGroupName`は、確認済みのデフォルト名を受け取る定義に変更する。親からのパラメータ渡し等、実コードに適した方法を使う。
-4. Redis側の`EngineVersion`も、実環境と整合する7.1系の提供値へ合わせる。旧グループのFamilyを6系のまま保持することと、Redis本体を6系に戻すことは別。
-5. ルートから変更セットを作成し、子の変更内容を確認して反映する。この段階で旧グループや旧Exportに置換・削除が入らないことを確認する。
-6. 反映完了後、旧Exportの`ListImports`／コンソールのImport一覧を確認する。参照が残れば、どのテンプレートのどの箇所か追跡し、全参照元について対応する。
+対象Redisの定義を次の状態にする。
 
-公式Knowledge Centerは、Import式を実値へ置き換えてImport側を先に更新する手順を説明している。[S03] ただし本案ではRedisが既に使用している7系デフォルト名へ合わせるため、公式例をそのまま転用したものではない。旧6系グループ名を機械的に固定して、7.1のRedisを旧グループへ戻す変更を作らない。
+| 項目 | 設定方針 |
+| --- | --- |
+| EngineVersion | 今回の更新先である"7.1" |
+| CacheParameterGroupName | 実環境で現在使用しているRedis 7用デフォルトグループの正確な名前 |
+| 旧ExportへのFn::ImportValue | 対象Redisの設定から外す |
+| 旧パラメータグループとExport | 維持する |
 
-親にある共通パラメータが、旧グループのFamilyとRedis側の設定を連動させている場合、旧Exportを維持しながらRedis側だけ切り替えられるように設計を分ける必要がある。子の中にImport式が固定されていれば、親の値変更だけでは除去できない。該当する親・子のコードを確認して修正範囲を決める。
+確認すること：
 
-### A-2. 旧リソースの整理は別の更新にする
+- ImportValueが親・子のどちらに記載されているかを確認する。
+- 子テンプレートにImportValueが直接書かれている場合は、親の入力値変更だけでは解除できないため、子テンプレートも修正する。
+- 親から子へパラメータでグループ名を渡す構成は継続できる。固定値を子へ直接記載することが必須ではない。
+- 他のRedisが旧Exportを利用していても、今回の対象と同じ設定へ一括変更しない。
+- ネスト構成の更新はルートスタックから行う。
 
-1. **旧ExportのImport参照が0であること**を確認する。
-2. 旧カスタムグループを**どのキャッシュクラスターも使っていないこと**を確認する。
-3. 保持／削除方針を確定する。保持するなら、旧6系グループとExportを変更せず残す方法もある。Redisが7系になったからといって、未使用の旧グループのFamilyまで7系にする必要があるとは扱わない。
-4. 削除する場合は、旧Export・旧グループ・専用子スタックのどこまでを除去するか、共有利用と保持ポリシーを含めて確認する。
-5. ルートから次の変更セットを作成して反映する。Redis本体の置換・削除や6系への逆戻りが含まれないことを確認する。
+AWS公式では、ネストされたスタックの更新などは、子スタックを直接更新するのではなく、ルートスタックから開始するよう説明されている。
+
+参考：AWS CloudFormation「Nested stacks」
+確認箇所：Performing stack operations on nested stacks
+https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-nested-stacks.html
+
+### 段階3：旧グループとExportの整理を別作業で行う
+
+段階2の更新が完了してから、旧資産の削除が必要か判断する。
+
+削除する場合は、次の両方を確認する。
+
+1. CloudFormation上で、旧ExportをImportするスタックが残っていない。
+2. ElastiCache上で、旧パラメータグループを使用するキャッシュが残っていない。
+
+Importがゼロであることと、実際のキャッシュで未使用であることは、別々に確認する。
+
+AWS公式では、キャッシュに関連付けられているパラメータグループは削除できないと説明されている。
+
+参考：Amazon ElastiCache API「DeleteCacheParameterGroup」
+https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_DeleteCacheParameterGroup.html
+
+他のImport先や使用中のキャッシュが残っている場合は、旧グループとExportを維持する。今回の対象Redisの整合化と同時に、すべてを整理する必要はない。
+
+## 5. 変更セットで確認すること
+
+実行前に、ルート・子スタックのロールバックが完了しているか確認する。
+
+変更セットでは、親の行だけでなく、子スタック内のリソース変更まで確認する。
+
+今回の整合化で確認する内容：
+
+- Redis本体のEngineVersionが意図した値になっている。
+- 適用するパラメータグループ名が、現在の実環境と一致している。
+- 対象スタックから旧Importが外れている。
+- 旧パラメータグループの置換・削除が計画されていない。
+- 旧パラメータグループの子スタックが削除されない。
+- 旧Exportの名前・値が変わらない。
+- Redis本体の置換・削除や、今回対象外の変更が含まれていない。
+
+Replacement: Falseは、リソースを置換しないという意味であり、更新処理がないことや無停止を保証する意味ではない。
+
+参考：AWS CloudFormation API「ResourceChange」
+確認箇所：Replacement
+https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChange.html
+
+また、AWS公式は、変更セットが作成できてもスタック更新の成功を保証するものではないと説明している。実行時のサービス側制約などで失敗する場合がある。
+
+実環境と同じ値を指定した場合でも、テンプレートの修正が必ず「管理情報だけの変更」になるとは扱わない。
+
+参考：AWS CloudFormation「Update stacks using change sets」
+https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html
+
+## 6. 独自パラメータグループが必須の場合
+
+現場の方針で独自パラメータグループが必須の場合は、デフォルトグループの継続利用案を採用しない。
+
+その場合の案：
+
+1. 旧Redis 6用グループと旧Exportを維持する。
+2. 別の論理IDでRedis 7用の新しいグループを追加する。
+3. Exportする場合は旧Exportとは別の名前を使う。
+4. 対象Redisの参照先を新しいグループへ変更する。
+5. 旧Importと実際の利用がなくなった後、旧資産を整理する。
+
+これも、参照中の旧Export値を変更せずに移行するという、同じ制約を踏まえた提案である。
+
+## 7. 採用理由の整理
+
+AWS公式が直接裏付けていること：
+
+- Import中のExport値は変更できない。
+- Export側を変更する前にImport側を更新する解決手順がある。
+- パラメータグループFamilyの変更は置換になる。
+- 使用中のパラメータグループは削除できない。
+
+今回の状況を踏まえた提案：
+
+- 更新に成功したRedis 7.1と、現在のデフォルトグループを継続する。
+- 旧グループの置換と本体の整合化を同時に行わない。
+- 旧資産の整理を後日に分ける。
+
+この順序により、今回問題になったExportの参照制約を避けながら、更新済みの実環境にCloudFormation定義を合わせることを目指す。
