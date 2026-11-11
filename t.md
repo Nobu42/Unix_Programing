@@ -1,73 +1,127 @@
-# ElastiCacheのバージョン差がCloudFormationのドリフトに出ない場合
+# Redis更新後のCloudFormationロールバック：Export参照エラーの調査と対処
 
-確認日：2026年11月6日
+作成日・公式資料確認日：2026年11月12日  
+対象：2026年11月11日に発生したと報告されたRedis OSS更新後のCloudFormation整合化失敗  
+用途：リーダおよび現場Copilotとの原因確認・対処方針検討
 
-## AWS公式スキーマで確認した内容
+## 1. 現時点の結論
 
-AWS公式の東京リージョン向けスキーマを取得して確認したところ、`AWS::ElastiCache::ReplicationGroup`の以下の項目は、`writeOnlyProperties`に含まれていた。
+**報告内容は「他スタックがImport中のExport値を、パラメータグループの置換に伴って変更・削除しようとして拒否された」というCloudFormationの制約と整合する。** ただし、エラー原文・失敗イベント・実テンプレートが未提示なので、発生原因を確定した扱いにはしない。
 
-| 項目 | 内容 |
+今回区別する必要があるのは次の2種類の「使用中」。
+
+| 種類 | 何が使用中か | 解除・変更に必要な条件 |
+|---|---|---|
+| CloudFormationのExport／Import依存 | 別スタックの`Fn::ImportValue`がExportを参照している | 当該Export値の変更・削除前に、すべてのImport参照を解消する。[S01][S02] |
+| ElastiCacheのグループ関連付け | キャッシュクラスターがパラメータグループを実際に使用している | グループを削除するには、どのキャッシュクラスターにも関連付いていない必要がある。[S05] |
+
+**Redisの実環境をデフォルトの7系グループへ切り替えても、それだけでCloudFormationの`Fn::ImportValue`定義が消えるわけではない。** 実環境の関連付けとテンプレートの参照関係を別々に確認する。
+
+## 2. 担当者から共有された事実
+
+- Redis OSSの6.2系から7.1系へのメジャーバージョンアップは、ElastiCacheのWebコンソールから実施し、成功したと報告されている。
+- 更新後はAWS提供のクラスターモード有効用デフォルトパラメータグループを使用しているとの説明。正確な物理名は未提示。
+- CloudFormationはルートスタックと子スタックからなるネスト構成。子にレプリケーショングループとパラメータグループがある。
+- CloudFormationで定義していたカスタムグループの設定は、`cluster-enabled = yes`のみとの説明。
+- 親側のエンジンバージョンを`7.1`、パラメータグループファミリーを`redis7`へ変更した。
+- 変更セットでレプリケーショングループは`Replacement: False`、パラメータグループは`Replacement: True`。Remove／Deleteに関する表示もあった。
+- 変更セットを実行するとCloudFormationのロールバックが発生した。
+- パラメータグループ名に関係するExport／Import参照があり、参照中のため変更等ができないという趣旨のエラーだった。
+
+共有内容はAWSの出力と未突合。RemoveとDeleteがどの列・論理IDに表示されたか、ロールバックの最終ステータスも未確認。
+
+## 3. AWS公式仕様と、今回の原因の見立て
+
+### 3.1 ImportされているExport値は変更・削除できない【公式仕様】
+
+AWSは、他スタックがImportしている出力値を変更したり、Export元スタックを削除したりできないと説明している。先にすべてのImportを除去する必要がある。[S01][S02]
+
+公式Knowledge Centerにも、次のエラーへの対処が掲載されている。
+
+> Export EXPORT_NAME cannot be updated as it is in use by STACK_NAME
+
+その解説では、Import元の特定、Import側テンプレートの参照置換、Import側の更新を先に行う流れが示されている。[S03]
+
+なお、禁止されるのは参照中のExport値の変更・削除等であり、Exportを持つスタックのすべての更新が常に禁止されるという意味ではない。
+
+### 3.2 パラメータグループのFamily変更は置換【公式仕様】
+
+`AWS::ElastiCache::ParameterGroup`の`CacheParameterGroupFamily`変更は`Replacement`。同リソースの`Ref`はパラメータグループのリソース名を返す。[S04]
+
+一般的な置換では、新しい物理リソースを作成し、依存先の参照を変更し、旧リソースを削除する。これは今回の実行成功や、Export制約を自動回避できるという保証ではない。[S06]
+
+### 3.3 今回想定される失敗経路【共有内容からの推論】
+
+以下は、Exportしている値がカスタムグループの`Ref`等である場合の見立て。
+
+1. 親から渡すFamilyを`redis6.x`から`redis7`へ変更した。
+2. 子のカスタムパラメータグループが置換対象になった。
+3. 置換によって、Exportするグループの物理名を変更する必要が生じた。リソース定義や出力の除去があればExport削除となる場合もある。
+4. 別スタックの`Fn::ImportValue`が旧Exportを参照したままだった。
+5. CloudFormationがExport変更・削除を拒否し、更新が失敗した。
+
+**ルートから子をまとめて更新しても、参照中Exportを変更できない制約はなくならない。** `DependsOn`による順序指定だけを、Import解消の代替にしない。[S01][S02]
+
+エラー原文が3.1の趣旨なら、この経路と一致する。一方、原文がElastiCacheのグループ使用中エラーなら、物理リソースの関連付けを調査する。両方が存在する場合もある。
+
+## 4. 対処前に保存・確認する情報
+
+### 4.1 まず現在の状態を確認する
+
+| 確認対象 | 記録する内容・目的 |
 |---|---|
-| `EngineVersion` | Redisのエンジンバージョン |
-| `CacheParameterGroupName` | Redisに適用するパラメータグループ名 |
+| ルートと全子スタック | 最終ステータス。`UPDATE_ROLLBACK_COMPLETE`と`UPDATE_ROLLBACK_FAILED`を区別する。 |
+| 失敗イベント | 最初の直接原因となった失敗の時刻、論理ID、物理ID、`ResourceStatusReason`全文。後続のキャンセル表示だけで原因を判断しない。 |
+| Redis実環境 | 現在のエンジンバージョン、適用グループの物理名、全ノードの状態、パラメータ適用状態、保留中の変更。 |
+| CloudFormationの保存済み定義 | ルート・子のテンプレート、入力パラメータ、出力、物理ID。ローカルの変更済みファイルと区別する。 |
+| 失敗した変更セット | 各子の`ResourceType`、`Action`、`Replacement`、`PolicyAction`、変更前後のプロパティ。 |
 
-出典：
+**CloudFormationのロールバックは、先にコンソールで成功したRedis更新が6.2へ戻ったことを意味しない。** Redis側の状態は必ず実環境で確認する。今回のロールバック中に何が試行・適用されたかもイベントと実設定で確認する。
 
-- [公式スキーマの配布案内](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/resource-type-schemas.html)
-- [確認した東京リージョンの公式ZIP](https://schema.cloudformation.ap-northeast-1.amazonaws.com/CloudformationSchema.zip)
+`UPDATE_ROLLBACK_FAILED`の場合、通常の再更新を始めない。失敗原因を確認し、現場の復旧手順に従って状態回復を検討する。リソーススキップを伴うロールバック続行ではテンプレートと実環境が不一致になることがあるため、本資料から機械的に実行しない。[S11]
 
-ZIP内の確認対象ファイルは、`aws-elasticache-replicationgroup.json`。
+### 4.2 Export／Importを確認する
 
-## writeOnlyPropertiesの意味
+1. CloudFormationコンソールで東京リージョンの「エクスポート」を開く。
+2. エラーに出たExport名を選び、Export元スタック・Export値・Import側スタックを保存する。
+3. 各Import側のテンプレートで、当該Exportを参照する`Fn::ImportValue`／`!ImportValue`を特定する。
+4. Redis本体以外の参照元も含める。エラーに示されたスタック1つだけで全参照元と決めつけない。
+5. Exportの`Value`が何を返すか確認する。特に旧グループの`Ref`か、固定文字列かを区別する。
 
-`writeOnlyProperties`は、CloudFormationから設定できる一方、リソースプロバイダーの読み取り処理では値を返さない項目を指す。
+公式に案内されている読み取りAPIは`ListExports`と`ListImports`。`ListImports`ではExport名を指定して参照中のスタックを調べられる。[S01][S12]
 
-そのため、これらの項目について、ドリフト比較で差を確認できる前提にはできない。
+### 4.3 物理リソースの関連付けも別に確認する
 
-出典：[AWS公式の定義](https://docs.aws.amazon.com/cloudformation-cli/latest/userguide/resource-type-schema.html#resource-type-schema-properties)
+- 現在のRedisが参照するデフォルトグループの正確な物理名。
+- 旧カスタムグループを使用している他のキャッシュクラスターの有無。
+- 失敗した更新で新規作成された7系カスタムグループが残っているか。
+- `cluster-enabled`以外に差分がないという共有内容を、実設定・テンプレート・グループ間の比較で確認する。
 
-## 今回の状況との関係
+`ListImports`が空であることは、キャッシュクラスターの関連付けがないことの証明ではない。逆に、Redisが旧グループを使っていなくてもImport依存は残り得る。
 
-以下の状態は起こり得る。
+## 5. 対処案A：現在のデフォルト7系グループを使い続ける
 
-- CloudFormationに保存された定義：**6.2**
-- ElastiCacheの実環境：**7.1**
-- ドリフト結果：**差分なし**
+**今回の実環境に合わせるための候補。AWSがこの現場に指定した対処ではなく、公式のImport解消手順とデフォルトグループ仕様を組み合わせた案。** デフォルト利用を最終構成としてよいか、まずリーダと決める。
 
-**`IN_SYNC`でも、エンジンバージョンまで一致している証明にはならない。**
+AWSが示すRedis OSS 7のクラスターモード有効用デフォルトグループは`default.redis7.cluster.on`。デフォルトグループ自体は変更・削除できない。[S07][S08]
 
-「テンプレートでバージョンを明示すれば、必ずドリフトで確認できる」という前提は置かない。明示されていても、CloudFormation側で読み取れない項目は比較できない。
+### A-1. 参照元を先に更新する
 
-## 確認方法
+1. Redis実環境が7.1系で、実際に使用しているグループが`default.redis7.cluster.on`であることを確認する。名前が異なる場合は、この前提で進めない。
+2. **旧パラメータグループ子スタックのFamily・リソース・Export名・Export値を、この段階では変更しない。** 親で`redis7`へ変更した値をそのまま渡して、旧グループを置換しないようにする。
+3. 旧ExportのImport側で、当該`Fn::ImportValue`を除去する。Redisの`CacheParameterGroupName`は、確認済みのデフォルト名を受け取る定義に変更する。親からのパラメータ渡し等、実コードに適した方法を使う。
+4. Redis側の`EngineVersion`も、実環境と整合する7.1系の提供値へ合わせる。旧グループのFamilyを6系のまま保持することと、Redis本体を6系に戻すことは別。
+5. ルートから変更セットを作成し、子の変更内容を確認して反映する。この段階で旧グループや旧Exportに置換・削除が入らないことを確認する。
+6. 反映完了後、旧Exportの`ListImports`／コンソールのImport一覧を確認する。参照が残れば、どのテンプレートのどの箇所か追跡し、全参照元について対応する。
 
-ドリフト結果だけで判断せず、以下を直接照合する。
+公式Knowledge Centerは、Import式を実値へ置き換えてImport側を先に更新する手順を説明している。[S03] ただし本案ではRedisが既に使用している7系デフォルト名へ合わせるため、公式例をそのまま転用したものではない。旧6系グループ名を機械的に固定して、7.1のRedisを旧グループへ戻す変更を作らない。
 
-| 確認項目 | 比較する内容 |
-|---|---|
-| エンジンバージョン | ElastiCacheの実バージョンと、CloudFormationの保存済みテンプレート・入力パラメータ |
-| 適用パラメータグループ | ElastiCacheで実際に適用されているグループ名と、CloudFormation側の参照先 |
+親にある共通パラメータが、旧グループのFamilyとRedis側の設定を連動させている場合、旧Exportを維持しながらRedis側だけ切り替えられるように設計を分ける必要がある。子の中にImport式が固定されていれば、親の値変更だけでは除去できない。該当する親・子のコードを確認して修正範囲を決める。
 
-## 未確認事項
+### A-2. 旧リソースの整理は別の更新にする
 
-- ドリフト結果にRedis本体の行そのものが表示されない理由までは、このプロパティ制限だけでは確定できない。
-- 今回確認したのは東京リージョン向けの公開スキーマ。現場のリージョンと使用中のリソースプロバイダースキーマは未確認。
-- 公開スキーマは更新されるため、必要に応じて対象リージョンのスキーマを再確認する。
-
-## 手順書への反映
-
-新規テスト用の手順書には、バージョン差がドリフトとして検出されることを必須条件にせず、実設定とCloudFormationの定義を直接照合する確認を追加した。
-
-[新規テスト用Redisの更新手順書](/Users/nobu/Documents/Codex/2026-10-03/cloudformation-aws-cloudformation-2-1-yaml/outputs/新規テスト用Redis_更新手順書_下書き.md)
-
-# AWS CloudFormation ElastiCache ドリフト検知および仕様に関する公式ドキュメント
-
-AWS CloudFormationのドリフト検知機能や、ElastiCacheリソースの仕様に関する公式ドキュメントの該当ページは以下の通りです。
-
-- **[AWS CloudFormation ユーザーガイド - スタックとリソースのドリフト検知](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/detect-drift-stack.html)**
-  - CloudFormationのドリフト検知がどのような仕組みでテンプレートと実環境の差分を比較・検出しているかの基本仕様が記載されています。
-
-- **[AWS CloudFormation ユーザーガイド - 個別スタックリソースのドリフト検知](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/detect-drift-resource.html)**
-  - リソースごとの期待値（テンプレート）と実環境（実際のプロパティ値）の差異を確認する方法や、変更されたプロパティがどのように表示されるかの解説があります。
-
-- **[AWS::ElastiCache::ReplicationGroup テンプレートリファレンス](https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-replicationgroup.html)**
-  - ElastiCacheのレプリケーショングループ（Redis）で管理されるプロパティ（`EngineVersion` や `CacheParameterGroupName` など）の定義や、アップデート時の挙動仕様を確認できます。
+1. **旧ExportのImport参照が0であること**を確認する。
+2. 旧カスタムグループを**どのキャッシュクラスターも使っていないこと**を確認する。
+3. 保持／削除方針を確定する。保持するなら、旧6系グループとExportを変更せず残す方法もある。Redisが7系になったからといって、未使用の旧グループのFamilyまで7系にする必要があるとは扱わない。
+4. 削除する場合は、旧Export・旧グループ・専用子スタックのどこまでを除去するか、共有利用と保持ポリシーを含めて確認する。
+5. ルートから次の変更セットを作成して反映する。Redis本体の置換・削除や6系への逆戻りが含まれないことを確認する。
