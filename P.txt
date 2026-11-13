@@ -1,3 +1,8 @@
+"今回の方法","公式ドキュメント","確認箇所","URL"
+"子テンプレートをS3に配置し、親のTemplateURLから参照する","AWS::CloudFormation::Stack","Properties → TemplateURL","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-stack.html"
+"修正した親テンプレートで変更セットを作成する","変更セットの作成手順","Create a change set (console)","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-create.html"
+"親から子の変更セットまで確認する","ネストされた変更セット","Working with change sets for nested stacks (console)","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/change-sets-for-nested-stacks.html"
+
 お疲れ様です。
 本日の進捗をご報告いたします。
 
