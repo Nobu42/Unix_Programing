@@ -1,3 +1,11 @@
+# ネストスタック更新：AWS公式ドキュメント対応表
+
+| 今回の方法 | 公式ドキュメント | 確認箇所 | URL |
+|---|---|---|---|
+| 子テンプレートをS3に配置し、親の`TemplateURL`から参照する | AWS::CloudFormation::Stack | Properties → TemplateURL | [公式ページ](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-stack.html) |
+| 修正した親テンプレートで変更セットを作成する | 変更セットの作成手順 | Create a change set (console) | [公式ページ](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-create.html) |
+| 親から子の変更セットまで確認する | ネストされた変更セット | Working with change sets for nested stacks (console) | [公式ページ](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/change-sets-for-nested-stacks.html) |
+
 # 子テンプレートを修正し、親スタックから変更セットを作成する手順
 
 確認日：2026年11月12日
