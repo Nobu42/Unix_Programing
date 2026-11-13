@@ -1,0 +1,82 @@
+Redis 6.2.6 → 7.1.0更新時の確認メモ
+
+【発生したこと】
+・Webコンソールから6.2.6→7.1.0へ更新。この時点では問題なし。
+・ルートスタックから変更セットを作成。
+・ParameterGroupはReplacement=True、ReplicationGroupはReplacement=False。
+・実行すると以下のエラーが発生し、CloudFormationはロールバック完了。
+
+Cannot update export TestFclEcr001AwsElstiCacheParameterGroup as it is in use by TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z6RB
+
+【確認できた原因】
+・ImportされているExport値を変更しようとして拒否された。これが今回の更新失敗の直接原因。[1]
+・共有コードでは、6-2がグループ名をExportし、6-1のCacheParameterGroupNameがImportValueで参照する構造。
+・AWS公式では、ParameterGroupのFamily変更は置換になる。また、ParameterGroupのRefはグループ名を返す。[2]
+・ReplicationGroupがReplacement=Falseでも、Exportの参照制約は解除されない。
+
+【発生経路の見立て：ここは推測】
+・Family変更によってParameterGroupが置換対象になった。
+・新しいグループ名へExport値を変えようとした。
+・6-1が旧Exportを参照していたため、更新に失敗したと考えられる。
+・この経路は、作業時の入力値と、変更前後のOutputsを照合して確定する。
+
+【先に確認する情報】
+・正確なExport名と、そのExport元・Import先。
+  エラー文は「AwsElstiCacheParameterGroup」。
+  共有コードは「AwsElastiCacheParameterGroup」。
+  綴りが異なるため、画面の実名と照合する。
+・ロールバック後のRedis実バージョン、適用グループの正式名、ノード状態。
+・作業当時の保存済みテンプレートと入力パラメータ。
+  今回ローカルで修正したファイルとは分ける。
+  FamilyはファイルのDefaultではなく、実際に渡された値を確認する。
+・6-2がどのスタックに属するか。
+  共有された6には6-1の呼び出しだけがあり、6-2の親は未確認。
+・共通の1_BaseStackを利用している他環境と、変更の影響範囲。
+・最初の失敗イベントと、関連する子スタックの最終状態。
+
+【対応案：現環境での実行は未検証】
+・現在の7系デフォルトグループを継続利用してよい場合の案。
+・最初の更新では、6-2の旧グループ・Family・Export名・Export値を維持する。
+・6-1の旧ImportValueを外し、現在使用中のグループ名を受け取る定義にする。
+・6から6-1へ、そのグループ名と実環境に合わせたエンジンバージョンを渡す。
+・AWS公式の解決手順も、Import側を先に更新する順序になっている。[3]
+・ただし公式記事は既存Export値への置き換え例。今回、現在の7系グループへ合わせる部分は個別の対応案。
+・旧6系グループ名を、そのまま7.1のRedisへ指定し直さない。
+・共通テンプレートの利用先を確認し、必要なら変更版を別のS3キーへ配置して親のTemplateURLを変更する。[6]
+・親から変更セットを作成し、子の変更内容まで確認する。実行も親の変更セットから行う。[4]
+・旧グループの置換・削除、旧Exportの変更が入っていたら、この案の条件を満たしていないため見直す。
+・旧資産の削除は別作業。全Importがなく、実際のキャッシュからも未使用と確認してから行う。[1][5]
+・独自の7系グループが必須なら、旧グループを残して新グループ・別Exportを追加し、参照先を移す案を別途検討する。
+
+【今回の整理の範囲】
+・ローカルの誤記修正と、今回のExportエラーの解消は別の作業。
+・Redisの更新成功と、CloudFormationの更新成功も別に確認する。
+・AWS実環境への接続・アップロード・変更セット作成・実行は行っていない。
+
+【AWS公式URL・確認箇所】
+
+[1] Import中のExport値を変更できない制約
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-importvalue.html
+見るところ：冒頭のNote内。Import後はExport値を変更できず、先に全Importを解除するという記載。
+
+[2] Family変更は置換、Refはグループ名を返す
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-parametergroup.html
+見るところ：Properties → CacheParameterGroupFamily、Return values → Ref。
+
+[3] Export使用中エラーの公式解決手順
+https://repost.aws/knowledge-center/cloudformation-stack-export-name-error
+見るところ：Short descriptionとResolution。Import先を特定し、Import側のテンプレートを変更して先に更新する手順。
+
+[4] 親・子の変更セットの確認と実行
+https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/change-sets-for-nested-stacks.html
+見るところ：Working with change sets for nested stacks (console)。
+子の変更セットを確認し、実行・削除はルートの変更セットから行うという記載。
+
+[5] 使用中のパラメータグループは削除できない
+https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_DeleteCacheParameterGroup.html
+見るところ：ページ冒頭。キャッシュに関連付いたグループは削除できないという記載。
+
+[6] 親からの更新と子テンプレートの参照先
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-stack.html
+見るところ：冒頭の親からの更新推奨、Properties → TemplateURL。
+子テンプレートをS3のHTTPS URLで参照する仕様。
