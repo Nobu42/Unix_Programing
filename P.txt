@@ -1,255 +1,128 @@
-# Redis更新失敗：CloudTrailの確認手順と調査対象イベント
+# CloudTrailのPG名の有無と、互換性エラーの因果関係
 
 確認日：2026-11-18
-用途：現場AIチャットへの引継ぎ。AWS公式仕様、確認手順、今回の未確認事項を区別する。
+用途：現場AIチャットへの追加引継ぎ。
 
-現場のAWS環境には接続していません。以下はログの読み取り手順であり、更新・ロールバック続行・設定変更は行っていません。実際のCloudTrailイベントは未取得です。
+AWS公式仕様を今回の事象に当てはめた分析です。現場のAWS環境へ接続せず、実ログも取得していません。「記録されていた場合」という条件で整理しています。AWS更新・ロールバック続行は実施していません。
 
-## 1. 最初に確認するイベント
+## 1. 最初にPG名の綴りを確認する
 
-既存のElastiCache ReplicationGroupに対する変更要求は、まず次を探します。【R1・R2・R4】
+今回の質問と、以前共有されたPG名には違いがあります。
+
+```text
+今回の質問：testf-awsel-8s50v98v1ty
+以前の共有：testf-awsel-8s50v98vj1ty
+                                ↑ 以前の名前にはjがある
+```
+
+この2つを自動的に同一PGとは扱いません。生のCloudTrail JSONにある名前を正とし、その名前のPGのFamilyと、Export値を照合してください。
+以下では、今回提示されたtestf-awsel-8s50v98v1tyが記録されていた場合を説明します。そのFamilyがredis6.xであること自体は、今回まだ確認できていません。
+
+## 2. PG名が記録されていた場合に確定できること
+
+対象イベントが次の内容なら、まず「その1回の要求で、記録された名前のPGを適用先として明示指定した」と説明できます。【R1・R2】
 
 ```text
 eventSource = elasticache.amazonaws.com
-eventName   = ModifyReplicationGroup
-
-確認するJSONパス（そのイベントに記録されている場合）
-requestParameters.replicationGroupId
-requestParameters.engineVersion
-requestParameters.cacheParameterGroupName
+eventName = ModifyReplicationGroup
+requestParameters.replicationGroupId = 対象RGの実ID
+requestParameters.cacheParameterGroupName = testf-awsel-8s50v98v1ty
 ```
 
-公式APIの入力項目はEngineVersion、CacheParameterGroupNameです。両方とも任意指定です。CloudTrailでは上記のlowerCamelCaseのキーを確認対象とし、実イベントのJSONで表記と値を確認します。【R2】
+- CloudTrailのrequestParametersは、要求で送られたパラメータを表す。【R1】
+- ModifyReplicationGroupのCacheParameterGroupNameは、RG内のクラスターへ適用するPG名の指定である。【R2】
+- したがって、上記の記録はPG名を指定した要求の証拠になる。
+- 適用成功や、実際にPGが切り替わった証拠ではない。同じ名前の再指定という場合もあるため、名前の記録だけで実環境に変更が発生したとは判断しない。
+- PG名だけでは、Family、エラーの発生理由、CloudFormation起因であることまでは確定しない。
 
-両項目が必ず同じイベントに記録されるとは限りません。片方だけを指定する要求や、複数回の変更要求もあるため、対象RGの該当時間帯のイベントをまとめて確認します。
+## 3. Incompatible cache parameter groupとの直接のつながり
 
-更新時とロールバック時に同じModifyReplicationGroupが呼ばれる可能性があります。イベント名だけでは区別せず、対象RG、時刻、要求値、エラーをCloudFormationのイベントと照合します。これは公式API仕様を今回の調査に当てはめた確認方法であり、今回の実呼び出しは未確認です。
+### 公式仕様
 
-## 2. Webコンソールでの具体的な確認手順
+AWS公式は、PGのFamilyがキャッシュのエンジンとバージョンに適合する必要があると説明しています。【R3】
+PG名とFamilyは別項目です。名前から推測せず、当該PGの情報、作成記録、サービスのエラー応答などで確認します。【R4・R5】
 
-AWS公式のEvent historyの操作を、今回の対象に当てはめた手順です。【R3】
+### 同じ要求で次の証拠が揃う場合
 
-1. 作業対象のAWSアカウントでCloudTrailを開く。
-2. リージョンを東京（ap-northeast-1）にする。
-3. 左メニューの「イベント履歴／Event history」を開く。
-4. 検索属性を「イベント名／Event name」にし、値をModifyReplicationGroupにする。既定の「読み取り専用／Read-only=false」が残っている場合は、検索属性を切り替えるか、そのフィルターを外す。
-5. 時間範囲を、CloudFormationの更新開始からロールバック失敗までを含む範囲にする。最初は少し広く取り、該当イベントが見つかってから絞る。
-6. 絶対期間を指定する場合は、JSTなどのローカル時間かUTCかを確認して入力する。
-7. 一覧のModifyReplicationGroupをクリックする。
-8. 詳細画面を下へスクロールし、「イベントレコード／Event record」に表示されるJSONを確認する。
-9. requestParameters内のreplicationGroupIdを読み、対象のRedisであることを確認する。スタック名・論理IDではなく、ReplicationGroupの実際の識別子と照合する。
-10. engineVersionとcacheParameterGroupNameを探して値を控える。requestParameters内の値であることを確認する。
-11. eventTime、requestID、eventID、errorCode、errorMessageも控える。
-12. 同じ時間帯の他のModifyReplicationGroupも開き、更新時・ロールバック時・手動操作時を分けて整理する。
-
-イベント履歴で使えるのは「属性フィルター1つ＋時間範囲」です。イベント名とイベントソースを同時に属性条件として指定することはできません。【R3】
-
-別の探し方として、検索属性を「イベントソース／Event source」、値をelasticache.amazonaws.comに変更できます。その場合、イベント名は一覧やJSONで確認します。
-
-requestParameters.engineVersionやcacheParameterGroupNameは、イベント履歴の検索属性ではありません。イベント名・時間で絞ってJSONを読むか、「イベントのダウンロード／Download events」からJSONを保存して確認します。CSVの一覧だけで要求パラメータを確認したつもりにならないようにします。【R3】
-
-## 3. JSONで控える項目と意味
-
-| JSONの項目 | 確認内容 |
-| --- | --- |
-| eventSource | elasticache.amazonaws.comか |
-| eventName | ModifyReplicationGroupなど、要求されたAPI名 |
-| awsRegion | ap-northeast-1か |
-| eventTime | 要求処理のUTC日時。Redisの更新完了日時とは別 |
-| requestParameters.replicationGroupId | 対象Redisの実ID |
-| requestParameters.engineVersion | その要求で送信されたバージョン。現在の実バージョンや変更前の値ではない |
-| requestParameters.cacheParameterGroupName | その要求で送信されたPG名。Export名ではなく、解決後のグループ名を確認する |
-| errorCode / errorMessage | サービスが返したエラー。存在する場合に確認する |
-| requestID | 呼び出し先サービスが生成した要求ID |
-| eventID | CloudTrailのイベントID。requestIDとは別 |
-| userIdentity / userAgent | 呼び出し主体を調べる補助情報 |
-
-JSONのeventTimeはUTCです。JSTへ換算する場合は9時間を加え、日付をまたぐ場合にも注意します。
-
-フィールドの意味はAWS公式のCloudTrailレコード仕様に基づきます。各サービス入力の意味はElastiCacheのAPI仕様で確認します。【R2・R4】
-
-JSONの形を示す説明用の例です。実際の取得ログではなく、両項目が必ず揃うという意味でもありません。
-
-```json
-{
-  "eventSource": "elasticache.amazonaws.com",
-  "eventName": "ModifyReplicationGroup",
-  "awsRegion": "ap-northeast-1",
-  "requestParameters": {
-    "replicationGroupId": "<対象RGの実ID>",
-    "engineVersion": "<実際に送信された値>",
-    "cacheParameterGroupName": "<実際に送信されたPG名>"
-  }
-}
-```
-
-公式のElastiCache CloudTrailガイドには、API要求・応答のJSON例があります。ただし、その掲載例はModifyReplicationGroupで今回の2項目を同時に示した実例ではありません。今回のキーの有無と送信値は実ログで確認します。【R1】
-
-## 4. 今回の事象との照合方法
-
-利用者から共有された対応関係：
-
-| PG名 | 共有されたFamily・位置付け |
-| --- | --- |
-| testf-awsel-8s50v98vj1ty | 旧カスタムPG、redis6.x |
-| testfc-cache-rw8ceksexno | V2カスタムPG、redis7 |
-| default.redis7.cluster.on | 手動アップグレード後に実環境で使用中と共有されたPG |
-
-これらの現在の状態を、今回の調査で実環境へ接続して確認したものではありません。
-
-### 更新時のPG互換性エラー
-
-- CloudFormationでPG互換性エラーが出た時刻前後のModifyReplicationGroupを探す。
-- 対象RGの要求にcacheParameterGroupName=testf-awsel-8s50v98vj1tyが記録されていれば、旧PG名を要求した証拠になる。
-- engineVersionも同時に存在する場合は、そのままの値を控える。テンプレートの7.1と、サービスが返す7.1.0の表記を勝手に統一しない。
-- 対象RG、errorMessage、時刻、可能ならElastiCacheのRequest IDを照合する。
-
-### ロールバック時のダウングレードエラー
-
-- CloudFormationがロールバックへ移った時刻以降の同じRGのイベントを探す。
-- engineVersion=6.2.6が記録されていれば、その要求で旧バージョンを指定した証拠になる。
-- エラー内容が、共有された「Cannot modify redis from 7.1.0 to redis version 6.2.6」と対応するか確認する。
-- cacheParameterGroupNameが記録されている場合は、それも控える。更新時と同じPG名が必ず送られるとは断定しない。
-
-ElastiCache公式は、ModifyReplicationGroupによるエンジンのダウングレードを認めていません。【R2】
-ただし、今回実際にどの要求が送られたかは、この資料だけでは確定していません。
-
-### CloudFormation起因かの照合
-
-- 子スタックのAwsElastiCacheReplicationGroupのイベント時刻・エラーと照合する。
-- userIdentity.arn、userIdentity.sessionContext.sessionIssuer、userIdentity.invokedBy、userAgentを、記録されている範囲で確認する。【R6】
-- CloudFormationは、サービスロール指定時はそのロール、未指定時は利用者認証情報から生成する一時セッションを使う。そのため、呼び出し主体が常に同じ形式になるとは限らない。【R7】
-- invokedByやuserAgentにcloudformation.amazonaws.comがあるかは参考になるが、必須条件として検索・判定しない。
-- CloudTrailのrequestIDを照合するときは、ElastiCache呼び出しのRequest IDと比較する。親のExecuteChangeSetなど別APIのrequestIDと同じだとは仮定しない。【R4】
-
-CloudFormation側のExecuteChangeSet／UpdateStackなどは、開始操作の確認用です。実際にElastiCacheへ渡したPG名・エンジン値の確認は、ElastiCache側の要求イベントを中心に行います。
-CloudFormation公式のログ説明には、スタックの入力パラメータはキー名のみを記録し、値は記録しない旨のNoteがあります。【R5】
-
-## 5. 調査対象イベント名の整理
-
-| イベント名 | 主な用途 | engineVersion／cacheParameterGroupNameの確認 |
-| --- | --- | --- |
-| ModifyReplicationGroup | 既存RGの変更要求。本件で最初に探す | APIに両入力あり。送信・記録されていれば確認できる。【R2】 |
-| ModifyCacheCluster | クラスター単位の変更要求 | APIに両入力あり。ただし今回CloudFormationがこのAPIを使ったとは未確認。【R8】 |
-| CreateReplicationGroup | 新規作成・置換で、このAPIが呼ばれた場合 | APIに両入力あり。既存RGの更新イベントと混同しない。【R9】 |
-| CreateCacheParameterGroup | V2などのPG作成 | cacheParameterGroupNameとcacheParameterGroupFamilyを確認する。EngineVersionの入力はない。【R10】 |
-| ModifyCacheParameterGroup | PG内の設定値の変更 | PG名と変更パラメータを確認する。RGへのPG関連付け変更やEngineVersion変更のイベントではない。【R11】 |
-| ExecuteChangeSet / UpdateStack | CloudFormation側の実行契機の確認 | eventSourceはcloudformation.amazonaws.com。ElastiCacheへの解決済み要求値と同一視しない。【R5】 |
-
-CacheParameterGroupFamilyはModifyReplicationGroupの入力項目ではありません。
-PG名がどのFamilyに属するかは、PGの設定、作成時のCreateCacheParameterGroup、保存済みの確認結果などと別途照合します。
-
-## 6. 見つからない・値がない場合
-
-- イベント履歴はリージョン単位・過去90日間の管理イベント。証跡を新規作成しなくても直近の履歴は確認できる。【R1・R3】
-- 対象アカウント、東京リージョン、JST／UTC、時間範囲、フィルターを再確認する。
-- 90日より前は、当時から保存されていた証跡のS3ログやCloudTrail Lakeなどの保存先を確認する。保存状況は現場で確認する。
-- requestParametersは要求で送られた項目であり、毎回全設定を含むものではない。APIの任意項目が両方揃うことを前提にしない。【R2・R4】
-- requestParametersにはサイズ超過による省略の仕様もある。項目がない場合、理由を未送信と断定せず、前後の要求も確認する。【R4】
-- エラーは通常errorCode／errorMessageを確認するが、サービスによってresponseElementsに入る場合もある。【R4】
-- エラー欄がないことだけでは、非同期のリソース更新やCloudFormation全体の成功を証明できない。【R2】
-- ElastiCache公式ではDescribe*のCloudTrail responseElementsはnullと説明されている。DescribeReplicationGroupsのCloudTrailイベントから、実環境の現在値を取得できるとは考えない。【R1】
-- ログが見つからないことだけで「CloudFormationはAPIを呼んでいない」と確定しない。記録の範囲と実適用版を確認する。
-
-## 7. 現場AIへ渡す確認結果の書式
-
-該当する要求が複数ある場合は、1イベントごとに記録します。値がない場合は「項目なし」、判断できない場合は「未確定」と記載します。
+1. 対象RGのModifyReplicationGroupに、上記PG名が記録されている。
+2. 同じイベントのerrorMessageに、次のようなFamilyの不一致が記録されている。
 
 ```text
-区分：更新時／ロールバック時／手動操作時／未確定
-対象AWSアカウント：
-awsRegion：
-eventTime（UTC）：
-eventTime（JST換算）：
-eventSource：
-eventName：
-requestParameters.replicationGroupId：
-requestParameters.engineVersion：
-requestParameters.cacheParameterGroupName：
-errorCode：
-errorMessage：
-requestID：
-eventID：
-呼び出し主体（userIdentity等）：
-対応するCloudFormationイベントの時刻・論理ID・エラー：
-ログから確定できたこと：
-まだ未確認のこと：
+Incompatible cache parameter group.
+The cache has Parameter Group Family redis7.
+The requested cache parameter group has Parameter Group Family redis6.x.
 ```
 
-## 8. AWS公式根拠：URLとページ内の確認場所
+3. 対象RG、時刻、可能ならElastiCacheのRequest IDが、CloudFormationの失敗イベントと対応する。
+4. 呼び出し主体やCloudFormationの実行記録も照合でき、手動操作など別の要求と区別できる。
 
-### R1：ElastiCache APIのCloudTrail記録
+この条件なら、次の直接原因を説明できます。
 
-- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/logging-using-cloudtrail.html
-- 確認箇所：冒頭、Amazon ElastiCache information in CloudTrail、Understanding Amazon ElastiCache log file entries。
-- ページ内検索：`eventSource`、`requestParameters`、`Describe*`。
-- 根拠：ElastiCache APIの記録、証跡未設定時のイベント履歴、JSON例、Describe系応答の扱い。
+```text
+redis7のキャッシュに対し、redis6.xのPGを適用する要求が送られた。
+ElastiCacheはFamilyの互換性が合わないため、その要求を拒否した。
+対応するCloudFormationのリソース更新が失敗した。
+```
 
-### R2：ModifyReplicationGroupの要求パラメータ
+これは「記録された要求・サービスのエラー」と「Familyの適合が必要という公式仕様」を組み合わせた説明です。【R1・R2・R3】
+上記のエラー文は利用者から共有されたものであり、今回実ログで確認したものではありません。
 
-- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyReplicationGroup.html
-- 確認箇所：Request Parameters → ReplicationGroupId、EngineVersion、CacheParameterGroupName、ApplyImmediately。
-- 根拠：対象IDと変更要求値、2項目の任意指定、ダウングレード不可、非同期適用。
+### 証拠が少ない場合の限界
 
-### R3：イベント履歴の画面操作・検索・90日制限
+| 確認できた内容 | 説明できる範囲 |
+| --- | --- |
+| PG名の記録だけ | その名前を適用先として要求した。Familyの不一致までは未確定 |
+| PG名＋同じ要求の短いIncompatible cache parameter group | その要求がPG互換性エラーで拒否された。Familyの具体値は追加照合が必要 |
+| PG名＋同じ要求のredis7／redis6.xを明示したエラー | 要求先と要求PGのFamily不一致による拒否を、サービス応答として説明できる |
+| さらにCloudFormationの失敗と対象・時刻・要求IDが対応 | 今回のCloudFormation更新失敗との直接のつながりを説明できる |
 
-- URL：https://docs.aws.amazon.com/awscloudtrail/latest/userguide/view-cloudtrail-events-console.html
-- 確認箇所：冒頭、To view Event history、Filtering CloudTrail events、Viewing details for an event、Downloading events、Customizing the display。
-- ページ内検索：`single attribute`、`Event record`、`90 days`、`Event time display`。
-- 根拠：1属性＋時間範囲、詳細JSON、ダウンロード、リージョン単位の90日履歴、表示時刻の切替。
+なぜCloudFormationが旧Exportを選んだかは、CloudTrailだけでは確定できません。CloudTrailの解決済みPG名と、6-1のImportValue式、親入力、Export値を別途照合します。
+また、このPG互換性エラーだけで、その後のダウングレード要求によるロールバック失敗まで証明したことにはなりません。ロールバック時のengineVersion・エラーは別要求として確認します。
 
-### R4：CloudTrail JSONフィールドの意味・省略制限
+## 4. cacheParameterGroupNameが存在しなかった場合
 
-- URL：https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-record-contents.html
-- 確認箇所：eventTime、eventName、requestParameters、errorCode、errorMessage、requestID、eventID。
-- ページ内検索：上記のフィールド名。
-- 根拠：UTC時刻、APIアクション名、実際の要求パラメータ、エラー、各ID。requestParametersのサイズ上限と省略規則。
+**1イベントにキーがないことだけから「CloudFormationの更新全体にPG指定の要求がなかった」とは判断できません。**
+記録の状態を分けて説明します。
 
-### R5：CloudFormation側のCloudTrail記録
+| 確認した状態 | 判断できること |
+| --- | --- |
+| 生JSONのrequestParametersに、対象RGや他の値はあるがPG名キーだけがない | 確定するのは「このイベントにPG名の明示指定が記録されていない」こと |
+| 加えて、その記録が完全で、対象・キー表記・省略の有無に問題がないと確認できる | その1回のAPIではPG名を明示指定しなかった、と読むことは公式定義と整合する解釈 |
+| requestParameters全体が欠落・null、または原本の完全性が不明 | PG名が送られたかは、この記録だけでは判断できない |
+| CSV、一覧、抜粋、AIの要約だけを見た | 原本のEvent record JSONを確認してから判断する |
+| 1つのModifyReplicationGroupにPG名がなかった | 別の変更要求、再試行、更新時とロールバック時まで「指定なし」とは広げられない |
 
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-api-logging-cloudtrail.html
-- 確認箇所：Understanding CloudFormation log file entries直下のNote、UpdateStackの例。
-- ページ内検索：`Parameter values`、`UpdateStack`。
-- 根拠：CloudFormation APIの記録と、スタック入力パラメータ値は記録しないという説明。
+ModifyReplicationGroupのCacheParameterGroupNameはRequired: Noであり、PG名を省略した要求もAPI仕様上あり得ます。【R2】
+一方、ログは1イベントが1要求を表すため、単一イベントはCloudFormationの一連の処理全体の証明にはなりません。【R6】
 
-### R6：呼び出し主体の確認
+ここでの「指定しなかった」は、その呼び出しの明示的な引数についての解釈です。実環境のPGが何だったか、暗黙のサービス処理がどうだったか、前後でPGが変わったかまでは証明しません。
+キーの欠落を「default.redis7.cluster.onを指定した」「V2へ切り替えた」と読み替えることもできません。
 
-- URL：https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-user-identity.html
-- 確認箇所：Fields → type、arn、invokedBy、sessionContext → sessionIssuer。
-- 根拠：IAM主体、サービスからの呼び出し、一時認証情報の発行元の確認。
+## 5. CloudTrailの記録制限をどう考慮するか
 
-### R7：CloudFormationが使う認証情報
+### 公式に確認できる省略仕様
 
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-iam-servicerole.html
-- 確認箇所：冒頭のサービスロールと既定動作の説明。
-- 根拠：サービスロール指定時と未指定時で、操作に使う認証情報の形が異なる。
+CloudTrailのrequestParametersにはサイズ上限があり、通常の説明では100KB超で同フィールドの内容が省略されます。最大1MBのイベントサイズに設定したイベントデータストアには別条件があります。【R1】
 
-### R8：ModifyCacheClusterの入力
+重要なのは、これはrequestParametersの内容全体の省略についての説明だという点です。
 
-- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyCacheCluster.html
-- 確認箇所：Request Parameters → CacheClusterId、EngineVersion、CacheParameterGroupName。
-- 根拠：クラスター変更APIにも両項目がある。本件での使用有無は実ログ次第。
+- requestParameters全体が失われている場合は、サイズ制限などの記録事情を確認する。
+- 小さなrequestParametersオブジェクト内にengineVersionなどが残り、PG名キーだけがない場合、それを100KB制限で自動的に説明しない。
+- 取得元、原本、加工・抽出の有無を確認する。
+- 参照した公式資料では、ElastiCacheのcacheParameterGroupNameだけを常時マスク・省略する個別仕様は確認できていない。
 
-### R9：CreateReplicationGroupの入力
+したがって、次のどちらの断定も避けます。
 
-- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CreateReplicationGroup.html
-- 確認箇所：Request Parameters → EngineVersion、CacheParameterGroupName。
-- 根拠：作成APIにも両入力がある。
+```text
+キーがないので、CloudFormation更新全体にPG指定は一切なかった。
+キーがないのは、CloudTrailがPG名だけを必ず隠すからだ。
+```
 
-### R10：PG作成時のFamily確認
+CloudFormationのwriteOnlyPropertiesは、リソースプロバイダーの読取応答に値を返さないというスキーマ上の扱いです。それ自体は、CloudTrailがこのPG名を省略する根拠にはなりません。【R7・R1】
 
-- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CreateCacheParameterGroup.html
-- 確認箇所：Request Parameters → CacheParameterGroupFamily、CacheParameterGroupName。
-- 根拠：PGの作成名とFamily。Redis本体のエンジン更新要求とは別。
+## 6. 現場で追加確認する順番
 
-### R11：PG内の設定変更
-
-- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyCacheParameterGroup.html
-- 確認箇所：Request Parameters → CacheParameterGroupName、ParameterNameValues。
-- 根拠：PG内のパラメータ値を変更するAPI。
-
-## 9. 現場AIへの依頼
-
-実イベントから、更新時・ロールバック時の対象RG、送信されたengineVersion／cacheParameterGroupName、エラーを抽出してください。
-キーがなければ補完せず、未記録として扱ってください。手動アップグレード時のイベントと混同せず、CloudFormationの時系列と対応させてください。
-ログで確認した事実と、テンプレート構造からの推論を分けて回答してください。
+1. Event recordの生JSONを保存し、今回と以前で異なるPG名の綴りを確定する。
+2. イベントのアカウント・リージョン・対象RG・更新／ロールバックの時刻を確認する。
+3. requestParameters全体と、cacheParameterGroupName、engineVersionの実際の有無・値を控える。
+4. errorCode、errorMessage、requestID、eventIDを控える。エラーがresponseElementsに記録されるサービスもあるため、その中も確認する。【R1】
