@@ -1,137 +1,268 @@
-ContinueUpdateRollbackのResourcesToSkip指定・スキップ後の状態
-現場AIへの引継ぎ／確認日：2026-11-18
+# V2 Exportが参照されなかった理由：現場AIへの引継ぎ
 
-この本文を前提に、現場のイベント・現在状態と照合してください。分析と手順確認の依頼であり、AWSの実操作は行わないでください。
-公式仕様、今回の利用者報告、条件付きの想定を分けて扱ってください。
+確認日：2026-11-18
+追記：ローカル3ファイルの読み取り確認、および利用者によるV2論理IDの訂正を反映。
 
-1. 今回の対象（利用者報告）
+## 0. この資料で依頼したいこと
 
-親スタック：
-TestFclElastiCacheStack
+利用者から共有されたExport対応と、6-1の参照式を照合し、旧グループが指定された経路を確認してください。公式仕様と条件付きの分析を分け、未確認事項は未確認のまま扱ってください。
 
-子スタックの実名：
-TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z76RB
+本件では現場のAWS環境へ接続していません。調査と資料作成のみで、テンプレート変更・S3アップロード・AWS更新・ロールバック続行は実施していません。
+現在の共有状態はUPDATE_ROLLBACK_FAILEDです。以下のコード例は参照構造の説明用で、現状で直ちに更新実行するための手順ではありません。
 
-失敗リソースの論理ID：
-AwsElastiCacheReplicationGroup
+## 1. 結論
 
-リソース型：AWS::ElastiCache::ReplicationGroup。
-親の現在状態：UPDATE_ROLLBACK_FAILED。
-該当RGのロールバック時エラー：Cannot modify redis from 7.1.0 to redis version 6.2.6。
-実機：EngineVersion 7.1.0、適用グループdefault.redis7.cluster.on。
-管理定義：EngineVersion 6.2.6、管理対象の旧PGのFamilyはredis6.x。
-該当RGリソース行の現在ステータス、新規V2子スタックの現在状態、他の失敗の有無は未確認。
+**確認したローカル6-1は、正しい綴りのImportValue名を!Joinで組み立てています。親6から既存Redis子へ渡すEcrNameはEcr001のままです。EnvName=Test、AppName=Fclであれば、旧Exportを参照する構造です。**
 
-2. 指定形式の判定
+```text
+Test + Fcl + Ecr001 + AwsElastiCacheParameterGroup
+= TestFclEcr001AwsElastiCacheParameterGroup
+→ testf-awsel-8s50v98vj1ty
+→ redis6.x
+```
 
-正式なパラメータ名はResourcesToSkip。
-公式のネスト内リソース指定形式は、NestedStackName.ResourceLogicalID。【S1】
+V2のExport名にはEcr001の後ろに-v7があります。参照式がその-v7を含まなければ、V2名には一致しません。
+Fn::ImportValueは、指定したExportの値を取得する関数です。V2という名前、新しさ、Familyの互換性を基準に参照先を自動選択する仕組みではありません。【R1・R2・R3】
 
-今回の候補は次のとおり。下の行全体が1つの値であり、途中に改行・空白を入れない。
+当初の貼付断片にあった関数の省略・綴り違いについては、ローカル6-1では正しいFn::ImportValue＋!JoinとAwsElastiCacheParameterGroupを確認しました。これらの転記差を今回の障害原因とは扱いません。
 
-TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z76RB.AwsElastiCacheReplicationGroup
+利用者からV2の子スタック論理IDはEcr001ElastiCacheRedisParameterGroupStackV2と訂正されました。V2を別リソースとして追加することと、既存RedisのCacheParameterGroupNameをそのExportへ向けることは別です。
 
-画面上で自動的に折り返されることは問題ない。実際の入力に改行を含めない。
-子スタックの実名と、親テンプレートにある子スタックの論理IDは区別する。
+ただし、ローカルファイルの確認は、更新時に実際に読み込まれたS3オブジェクト版・実入力・API送信値を直接確認したものではありません。
 
-操作先のStackNameは親のTestFclElastiCacheStack。
-上記の候補は公式の指定形式・許容文字パターンに一致する。ただし、文字列が正しいことと、現在スキップ可能な状態であることは別。【S1】
+## 2. 利用者から共有された対応関係
 
-3. スキップ対象としての必須条件
+| 種類 | Export名 | Export値＝グループ名 | Family |
+| --- | --- | --- | --- |
+| 既存 | TestFclEcr001AwsElastiCacheParameterGroup | testf-awsel-8s50v98vj1ty | redis6.x |
+| V2 | TestFclEcr001-v7AwsElastiCacheParameterGroup | testfc-cache-rw8ceksexno | redis7 |
 
-・AwsElastiCacheReplicationGroupの現在のリソース行がUPDATE_FAILEDであること。
-・その理由が、ロールバック自体の失敗であること。今回は6.2.6への復帰拒否と照合する。
-・親がUPDATE_ROLLBACK_FAILEDであることや、過去のエラーに論理IDが出たことだけでは、この条件を満たした証拠にならない。
-・対象は必要最小限とする。今回はRG1件を候補としているが、他の失敗の有無は別途確認する。【S1】
+既存RedisのEcrNameはEcr001と共有されています。
+EnvName=Test、AppName=Fclは上記Export名・以前のローカル版に基づく計算の前提です。今回の実際の入力値と一致するか確認してください。
 
-4. 子スタックのDELETE状態条件との違い
+## 3. 今回のファイル確認で分かったこと
 
-公式のDELETE_IN_PROGRESS／DELETE_COMPLETE／DELETE_FAILEDという条件は、AWS::CloudFormation::Stackリソース自体をスキップする場合の条件。
+確認したローカルファイル：
 
-今回の指定は、子スタック内のAWS::ElastiCache::ReplicationGroupをスキップするもの。
-したがって、今回のRG指定のために、子スタック自身がDELETE系状態である必要はない。
-一方、子スタックがUPDATE_ROLLBACK_FAILEDであっても、それだけを理由に子全体をスキップしてよいとは判断しない。【S1】
+- /Users/nobu/Elascticach/CloudFormation/6_TestFclElastiCacheStack.yml
+- /Users/nobu/Elascticach/CloudFormation/6-1_ElastiCacheRedisStack.yml
+- /Users/nobu/Elascticach/CloudFormation/6-2_ElastiCacheRedisParameterGroupStack.yml
 
-5. スキップ後の状態
+### 親6から渡す値
 
-以下は、スキップ指定が受理され、残るロールバック処理も成功した場合の想定。
+- 既存PG子への入力：EcrName=Ecr001、CacheParameterGroupFamily=redis6.x（45〜46行）。
+- V2 PG子への入力：EcrName=Ecr001-v7、CacheParameterGroupFamily=redis7（58〜59行）。
+- 既存Redis子への入力：EcrName=Ecr001、EngineVersion=7.1（71〜72行）。
+- AppNameのDefaultはFcl、EnvNameのDefaultはTest（14行・32行）。ただしDefaultは実際に指定された値の証明ではありません。
 
-対象RGのリソース行：
-・CloudFormationがUPDATE_COMPLETEに設定する。【S1】【S2】
-・これはスキップ扱いで状態を進めることを意味し、実機と管理定義の整合完了ではない。
+利用者の最新訂正によるV2側の論理IDは、Ecr001ElastiCacheRedisParameterGroupStackV2です。
+ローカル親6の49行は旧側と同名の表記になっており、48行のコメント・字下げにも差がありますが、実作業版は上記V2論理IDであるとの訂正を優先します。ローカル転記上の差を、今回報告された実行エラーの原因とは扱いません。
+元テンプレートは書き換えていません。
 
-既存Redis子スタック自身：
-・親からの続行により、子もロールバックの対象になる。
-・残るロールバックが成功した場合、UPDATE_ROLLBACK_COMPLETEを想定する。
-・この子スタック自身の状態と、親に表示されるAWS::CloudFormation::Stackのリソース行を混同しない。【S2】【S3】
+### 子6-1の実際の参照式
 
-親スタック：
-・全体の続行が成功すればUPDATE_ROLLBACK_COMPLETEになる。【S1】【S2】
-・UPDATE_COMPLETEになることを、今回の親のロールバック完了条件にはしない。
+6-1の149〜156行で次を確認しました。
 
-親で想定する流れ：
+```yaml
+CacheParameterGroupName:
+  Fn::ImportValue:
+    !Join
+      - ""
+      - - !Ref EnvName
+        - !Ref AppName
+        - !Ref EcrName
+        - 'AwsElastiCacheParameterGroup'
+```
 
-UPDATE_ROLLBACK_FAILED
-→ UPDATE_ROLLBACK_IN_PROGRESS
-→ 必要に応じてUPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS
-→ UPDATE_ROLLBACK_COMPLETE
+Fn::ImportValueの下に!Joinがあり、末尾の綴りもAwsElastiCacheParameterGroupです。
+空文字の区切りで、EnvName、AppName、EcrName、固定末尾を連結します。【R1・R3】
+既存Redis子へ渡すEcrNameはEcr001なので、この式には-v7が入りません。
 
-中間状態の表示は処理内容による。cleanupは、失敗した更新で新規作成したリソース等の後片付けを示す。【S3】
+### 子6-2のExport式
 
-6. 今回、保証できないこと・復旧後に必要なこと
+6-2の73〜80行では、!Refで取得したPG名を、次の名前でExportしています。
 
-・RGを1件スキップしただけで、親・子すべての復旧成功が保証されるわけではない。
-・V2の削除等、残るロールバック処理が別途失敗すれば、再び停止する可能性がある。
-・対象RGはdefault.redis7.cluster.onを使用しているが、V2の他キャッシュでの使用・Export参照・現在状態は別に確認する。
-・今回の方針は、対象RGを6系へ戻す処理を省略し、7.1を維持して復旧すること。実機のバージョン・適用グループ・稼働状態は実行後にも確認する。
-・スキップ後も管理定義との不整合は残る。無関係な通常更新を先に行わず、復旧後の整合化用の変更内容を用意する。【S1】【S2】
+```text
+EnvName + AppName + EcrName + AwsElastiCacheParameterGroup
+```
 
-現場AIには、まず現在のRGリソース行とV2子の状態を照合し、候補の成立条件・残る停止要因・復旧後の確認項目を返してほしい。未確認情報を推測で補完しない。
+したがって、同じ6-2を使っても、旧側へEcr001を渡す場合と、V2側へEcr001-v7を渡す場合ではExport名が異なります。
+V2という子スタック論理IDや、その子に渡すEcrNameは、別の既存Redis子に渡すEcrNameを自動変更しません。
 
-7. AWS公式資料と記載場所
+### この確認の範囲
 
-【S1】ContinueUpdateRollback API
-URL：
-https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ContinueUpdateRollback.html
+- ローカル3ファイルを直接読み取りました。
+- V2論理IDは利用者の訂正で確認しました。
+- S3上の6-1／6-2が今回のローカル版と同じ内容か、変更セット作成時の入力値が何かは、AWS環境で確認していません。
+- CloudTrailで実際の要求PG名を確認するまでは、「ソース上の参照経路」と「実際のAPI送信内容」は区別してください。
+- ローカル親6には、隣接6-1でDefaultのないAppNameLowerCase、EnvNameLowerCase、LogGroupName、DeliveryStreamNameを渡す記載もありません。実適用版との照合事項であり、今回のエラー原因とは断定しません。
 
-確認箇所①：ページ冒頭。
-確認できること：UPDATE_ROLLBACK_FAILEDからUPDATE_ROLLBACK_COMPLETEへロールバックを続行するAPI。
+## 4. なぜV2の追加だけでは切り替わらないのか
 
-確認箇所②：Request Parameters → ResourcesToSkip.member.N、そのImportantとNote。
-ページ内検索：ResourcesToSkip。
-確認できること：
-・スキップできるのは、ロールバック失敗によりUPDATE_FAILEDとなったリソース。
-・対象は必要最小限。
-・指定したリソースをUPDATE_COMPLETEへ設定する。
-・ネスト内の形式はNestedStackName.ResourceLogicalID。
-・DELETE系状態の条件は、子スタックコンテナ自体をスキップする場合に適用。
-・スキップ後はテンプレートとの不整合が残る。
-同欄のPatternには、改行・空白は含まれない。
+新規PGの作成と、既存ReplicationGroupへの関連付けは別です。
 
-確認箇所③：Request Parameters → StackNameのNote。
-ページ内検索：StackName。
-確認できること：子ではなく親スタックを操作先に指定する。
+- V2をAddする：新しいParameterGroupや、そのOutputs／Exportを作成する。
+- 既存RedisでV2を使う：既存RGのCacheParameterGroupNameが、V2の物理グループ名へ解決されるようにする。
 
-【S2】Continue rolling back an update
-URL：
-https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-continueupdaterollback.html
+旧名をImportValueで参照したままなら、V2という別名のExportを追加しても、その参照式の値は変わりません。
+変更セットにAddがあることは、新しいリソースの追加予定を示しますが、既存RGがそれを使うという証明にはなりません。【R1・R4】
 
-確認箇所①：ページ冒頭の状態説明と、ネストスタックに関するNote。
-ページ内検索：UPDATE_ROLLBACK_COMPLETE。
-確認できること：親のロールバック続行では子もロールバック対象になる。
+したがって、実適用版も今回確認した参照構造・入力値であれば、旧グループが選ばれたことはImportValueの仕様に沿う挙動です。この説明のために、CloudFormationがRedis7用グループの自動選択に失敗したという仮説を置く必要はありません。
 
-確認箇所②：コンソールでの続行手順中、スキップ説明直後のWarning。
-ページ内検索：Warning、inconsistent。
-確認できること：スキップしたリソースはUPDATE_COMPLETEになるが、管理定義との整合は別途必要。
+## 5. 変更セットで事前に判別する方法はあったか
 
-【S3】View CloudFormation stack events
-URL：
-https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/view-stack-events.html
+**変更セットの一覧だけで解決後の物理名・Familyまで必ず見えるとは言えません。ただし、子6-1の参照式・入力値・Export対応を照合すれば、旧参照が残る構造は事前確認できます。**
 
-確認箇所：ページ内の状態コード説明表。
-ページ内検索：UPDATE_ROLLBACK_IN_PROGRESS、UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS、UPDATE_ROLLBACK_COMPLETE。
-確認できること：
-・ロールバック処理中、後片付け中、完了の意味を区別できる。
-・UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESSは、失敗した更新後の新規リソース削除等が継続している状態。
+確認方法：
 
-本件では公式資料との照合と資料作成のみを行った。現場のAWS環境への接続、ロールバック続行、スキップ操作は実施していない。
+1. 親からネストされた子6-1の変更セットを開く。【R5】
+2. 対象AwsElastiCacheReplicationGroupのProperty-level changes／View detailsを開き、Before／Afterのテンプレート設定を見る。【R6】
+3. CacheParameterGroupNameがV2へ変更されるかを確認する。差分欄に出ていなくても、提出版6-1に残る参照式を確認する。
+4. 実際のEnvName、AppName、EcrNameを記録し、ImportValueの名前を組み立てる。
+5. CloudFormationのExportsで、その名前のExport値を確認する。今回の対応表と照合する。【R10】
+6. V2子のOutputsに新しいExportがあることと、既存RGの参照先がそこを向くことを、別々に確認する。
+7. APIを使って詳細確認する場合はDescribeChangeSetのIncludePropertyValues、ResourceChangeのBeforeContext／AfterContextを利用できる。ただし、表示が省略・未解決の場合もあり、解決後のPG名・Familyが必ず出るとは保証しない。【R8・R9】
+
+AWS公式は、ネストされたスタックのプロパティ単位変更セットではクロススタック参照を解決しない、と説明しています。【R7】
+Dynamic評価では、組み込み関数の結果に依存する値を実行前に確定できない場合もあります。【R9】
+
+そのため「EngineVersionしか差分にない＝PG参照は問題ない」と判断せず、提出版・入力・Exportの照合を組み合わせる必要があります。
+ただし、今回の変更セット画面に具体的に何が表示されていたかは未確認です。事前に必ず明確な警告が表示されていた、と断定しないでください。
+
+## 6. 実行時の経路を確定する証拠
+
+CloudTrailの更新時のModifyReplicationGroupで、requestParameters.cacheParameterGroupNameを確認します。【R11】
+
+```text
+cacheParameterGroupName = testf-awsel-8s50v98vj1ty
+```
+
+この値が該当する更新時のイベントで確認できれば、旧PG名が実際に要求された証拠になります。
+eventTime、対象RG、requestID、engineVersion、errorMessageを合わせ、更新時とロールバック時を区別してください。
+該当値が取得できない、または別名だった場合は、推測で補わず、適用したS3オブジェクト版や親入力も含め再確認します。
+
+今回のエラーについて「エンジン変更時には必ず未変更のPG名も再送される」とまでは断定していません。テンプレート上の名前解決と、実際のAPI送信内容を分けて確認します。
+
+## 7. 修正を検討する場合の注意
+
+EcrName全体をEcr001-v7へ変更する案は、そのまま採用しないでください。
+今回確認したローカル6-1では、EcrNameがReplicationGroupId（122〜126行）、ReplicationGroupDescription、Nameタグ、PGをImportする名前（149〜156行）に共用されています。
+ReplicationGroupIdの変更は公式上Replacementであり、PG参照だけを切り替えるつもりで、本体の置換を誘発するおそれがあります。【R4】
+
+参照先だけを変える考え方の説明例：
+
+```yaml
+CacheParameterGroupName:
+  Fn::ImportValue:
+    Fn::Sub: '${EnvName}${AppName}${EcrName}-v7AwsElastiCacheParameterGroup'
+```
+
+この例ではEcrNameをEcr001のまま維持し、PG参照式にだけ-v7を含めています。
+これは完成した実行用テンプレートではありません。実際の入力値・V2の存在・Family・適用可否を照合する必要があります。
+
+他環境と子テンプレートを共用している場合、共通ファイルの上書きで他環境の次回更新にも影響する可能性があります。対象用の別版配布や、PG参照用の専用パラメータを分ける案を現場で検討してください。
+現在はUPDATE_ROLLBACK_FAILEDなので、通常更新による修正は、まず復旧方針と現在状態を確認した後に検討します。【R12】
+
+## 8. AWS公式資料：URLと確認場所
+
+### R1：Fn::ImportValueは指定したExportの値を取得する
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-importvalue.html
+- 確認箇所：冒頭、Parameters → sharedValueToImport、Example、Supported functions。
+- ページ内検索：`sharedValueToImport`、`Fn::Sub`。
+- 確認できること：別スタックがExportした値の取得。Sub／Join／Refを組み合わせる例・対応関数。SubとImportValueの短縮記法を直接重ねる形式の制限もNoteに記載。
+
+### R2：${...}を置換するFn::Sub
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-sub.html
+- 確認箇所：Declaration、Parameters → String。
+- ページ内検索：`String`。
+- 確認できること：Fn::Subで入力文字列中の変数を指定値へ置換する。
+
+### R3：Fn::Joinによる連結
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-join.html
+- 確認箇所：冒頭、Parameters → delimiter、Return value。
+- ページ内検索：`delimiter`。
+- 確認できること：値を指定区切り文字で連結する。空の区切りなら文字を挟まず連結する。
+
+### R4：PG名の関連付けと、RG識別子変更の置換
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-replicationgroup.html
+- 確認箇所①：Properties → CacheParameterGroupName。
+- ページ内検索①：`CacheParameterGroupName`。
+- 確認できること①：RGに関連付けるグループ名を指定するプロパティ。
+- 確認箇所②：Properties → ReplicationGroupId → Update requires。
+- ページ内検索②：`ReplicationGroupId`。
+- 確認できること②：ReplicationGroupId変更はReplacement。
+
+### R5：親から子の変更セットまで確認する
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/change-sets-for-nested-stacks.html
+- 確認箇所：Working with change sets for nested stacks (console) → View the change set。
+- ページ内検索：`View the change set`。
+- 確認できること：親からネストされた子の変更セットへ進み、子のリソース変更を確認できる。
+
+### R6：プロパティ単位の変更前後を見る
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-view.html
+- 確認箇所：コンソールの変更セット確認手順、Property-level changes列のView details。
+- ページ内検索：`Property-level changes`、`View details`。
+- 確認できること：変更前後のテンプレート設定、Before／After値を確認する方法。
+
+### R7：ネスト変更セットの参照解決の制限
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-create.html
+- 確認箇所：コンソール作成手順のSubmit直後のNote。
+- ページ内検索：`cross-stack references`。
+- 確認できること：ネストされたスタックのプロパティ単位変更セットでは、クロススタック参照を解決しない。
+
+### R8：DescribeChangeSetで詳細値を取得する指定
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_DescribeChangeSet.html
+- 確認箇所：Request Parameters → IncludePropertyValues。
+- ページ内検索：`IncludePropertyValues`。
+- 確認できること：trueでプロパティ値の詳細を含む変更内容を返す。
+
+### R9：Before／Afterのコンテキストと、Dynamic評価
+
+- URL①：https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChange.html
+- 確認箇所①：Contents → BeforeContext／AfterContext。
+- ページ内検索①：`BeforeContext`、`AfterContext`。
+- 確認できること①：変更前後のリソースのコンテキストを持つJSON文字列。
+- URL②：https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChangeDetail.html
+- 確認箇所②：Contents → Evaluation。
+- ページ内検索②：`Dynamic`。
+- 確認できること②：組み込み関数の結果に依存して、変更セット作成時には対象値を確定できない評価がある。
+
+### R10：Export名・値・Import先の確認
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html
+- 確認箇所：Listing exported output values、Listing stacks that import an exported output value。
+- ページ内検索：`Export Name`。
+- 確認できること：CloudFormationのExportsで名前と値を確認し、名前を開くとImportしているスタックを確認できる。
+
+### R11：実際のAPI送信内容をCloudTrailで確認する
+
+- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/logging-using-cloudtrail.html
+- 確認箇所：Amazon ElastiCache information in CloudTrail、Understanding Amazon ElastiCache log file entries。
+- ページ内検索：`requestParameters`。
+- 確認できること：API呼び出しと要求内容を確認できる。今回の実送信値はまだ取得していない。
+
+### R12：UPDATE_ROLLBACK_FAILEDでの通常更新の制約
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-continueupdaterollback.html
+- 確認箇所：ページ冒頭の状態説明。
+- ページ内検索：`can't be updated`。
+- 確認できること：UPDATE_ROLLBACK_FAILEDでは通常更新できず、まずロールバックの復旧が必要。
+
+## 9. 現場AIに返してほしい確認結果
+
+1. 今回確認したローカル6-1のImportValue＋Join式が、変更セット作成時のS3版と一致するか。
+2. 既存RGへ渡したEnvName、AppName、EcrNameと、解決されるExport名。
+3. そのExport値が旧PG名か、V2のPG名か。
+4. 変更セットと提出版6-1のどこで、その参照を確認できたか。
+5. CloudTrailの更新時のPG名が、上記の参照解決と一致するか。
+6. EcrNameを変えず、PG参照だけを切り替える場合の修正箇所と、他環境への影響範囲。
+
+ローカルソース上は旧Exportを参照する構造と確認できました。実適用版・入力値・API送信内容は未取得です。これらを区別したうえで回答してください。
