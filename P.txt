@@ -1,297 +1,137 @@
-# Redis CloudFormation更新失敗：現場AIへの引継ぎ
+ContinueUpdateRollbackのResourcesToSkip指定・スキップ後の状態
+現場AIへの引継ぎ／確認日：2026-11-18
 
-確認日：2026-11-18
+この本文を前提に、現場のイベント・現在状態と照合してください。分析と手順確認の依頼であり、AWSの実操作は行わないでください。
+公式仕様、今回の利用者報告、条件付きの想定を分けて扱ってください。
 
-## このチャットでお願いしたいこと
+1. 今回の対象（利用者報告）
 
-以下の利用者報告・AWS公式仕様・未確認事項を前提に、手元のテンプレートとイベントを照合し、原因の参照経路と復旧手順案を整理してください。
-
-- 外部URLを閲覧できない場合も、本文の公式仕様の要約と根拠番号を使用してください。独自に確認できていない資料は、確認済みと表現しないでください。
-- 利用者が確認した事実、公式の一般仕様、今回の構成に対する仮説を区別してください。
-- この依頼は分析と手順案の作成です。AWSの更新・削除・ロールバック続行等の実操作は行わないでください。
-- 本文のスキップ指定は候補です。指定条件とV2の状態を照合してから、現場の作業者・確認者が実行判断します。
-
-本件の調査・資料作成では、現場のAWS実環境への接続・操作は行っていません。公式ドキュメントと一般公開スキーマを確認したもので、AWSサポートが今回の環境を個別検証した回答ではありません。
-
-## 1. 利用者から共有された事実
-
-CloudFormation管理のElastiCache ReplicationGroupを、過去にWebコンソールから6.2.6→7.1へ更新済みです。
-
-| 項目 | CloudFormation管理定義 | 現在の実環境 |
-| --- | --- | --- |
-| EngineVersion | 6.2.6 | 7.1.0 |
-| ParameterGroupのFamily | redis6.x | redis7 |
-| 実機の適用グループ名 | 管理定義の参照先は要照合 | default.redis7.cluster.on |
-
-FamilyはParameterGroup側の設定です。ReplicationGroup側ではCacheParameterGroupNameで適用するグループ名を指定します。
-この表のFamily差は、管理定義が参照する旧6系グループと、実機が適用するdefault.redis7.cluster.onとの比較です。旧6-2が管理するグループ自体のFamilyがredis7へ変化した、と確認したものではありません。
-
-構成・状態：
-
-- 6：ルートテンプレート。
-- 6-1：ReplicationGroupの子テンプレート。
-- 6-2：既存ParameterGroupの子テンプレート。
-- 新規V2：変更セットにAddが出たParameterGroup用ネストリソース。論理IDは、共有表記でEcr001ElastiCachRedisParameterGroupStackV2。
-- ルート実スタック名：TestFclElastiCacheStack。
-- 失敗したRedis子スタック名：TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z76RB。
-- ロールバックのエラーが出たリソース論理ID：AwsElastiCacheReplicationGroup。
-- ルートの現在状態：UPDATE_ROLLBACK_FAILED。
-- V2子スタックの現在状態と、該当RGリソース行の現在ステータスは未確認。
-
-以前共有された6-1は、CacheParameterGroupNameをImportValueで参照し、6-2がグループ名をExportする構成でした。ただし、今回V2を追加した適用版テンプレートとの一致は未確認です。
-
-変更セットで共有された表示：
-
-- V2ネストリソース：Add。
-- 既存RedisのEngineVersion：6.2→7.1、RequiresRecreation=Never。
-- 別途、before側7.1／after側7.1という表示も共有されています。同じ変更セット・子スタック・論理ID・時点の情報か、元画面の項目名を含め未確認です。
-
-## 2. 発生したエラー
-
-利用者の説明では、更新時にエラー1、その後のロールバックでエラー2が発生しました。イベントの時刻とステータスによる最終照合は未実施です。
-
-エラー1：
-
-```text
-Incompatible cache parameter group.
-The cache has Parameter Group Family redis7.
-The requested cache parameter group has Parameter Group Family redis6.x.
-```
-
-エラー2（ロールバック時、AwsElastiCacheReplicationGroup）：
-
-```text
-Cannot modify redis from 7.1.0 to redis version 6.2.6
-```
-
-## 3. 現時点の原因整理
-
-**背景として確認された不整合**
-
-管理定義は6.2.6／redis6.xのまま、実環境は7.1.0／redis7です。以下の直接原因は、共有された管理値とエラー内容に整合します。
-
-| 処理 | 直接原因 | 公式根拠 |
-| --- | --- | --- |
-| 更新 | redis7環境へのredis6.xグループの指定が、互換性不一致で拒否された | R1・R3 |
-| ロールバック | 更新前の構成へ戻す過程で、7.1.0→6.2.6の変更要求がダウングレード制約により拒否された | R2・R3 |
-
-**未確定の参照経路**
-
-最初に照合したい仮説は、V2を追加しても、既存6-1のImportValueが旧Exportを参照し、旧redis6.xグループ名が選ばれたという経路です。
-
-ただし、旧グループ名と、その値が親入力・ImportValue・Mapping・Condition・S3上の旧版等のどこから来たかは未確定です。V2のAddだけでは、V2の実Familyや、既存RedisがV2を使うことを証明できません。
-
-## 4. 変更セット・ドリフトの解釈
-
-- RequiresRecreation=Neverは「このプロパティ変更で再作成が不要」という意味です。更新成功や互換性の保証ではありません。【R4】
-- 変更セットは更新成功を保証しません。【R5】
-- ネストされたスタックのプロパティ単位変更セットでは、クロススタック参照を解決しないという公式の制限があります。【R6】
-- 2026-11-18取得の東京公式スキーマでは、ReplicationGroupのEngineVersionとCacheParameterGroupNameはwriteOnlyPropertiesです。この2項目について、ドリフト検出のIN_SYNCだけで実機との一致を証明できる前提にはしません。【R9・R10】
-- ReplicationGroupとParameterGroup自体は、ドリフト検出対応です。ElastiCache全体が未対応という意味ではありません。【R11】
-- drift-aware変更セットでも、write-only項目は前回デプロイ値との比較になります。before／afterの値だけで整合済みやロールバック先7.1を判断せず、BeforeValueFrom等も確認します。【R12】
-
-write-onlyという事実だけから、CloudFormationが今回どのAPI引数を送信したかまでは断定できません。
-今回確認した公式資料の範囲では、Redis6→7専用のCloudFormation既知不具合という説明は確認できていません。一般仕様に基づく説明と、個別不具合の認定を区別してください。
-
-## 5. 原因確定のために照合する資料
-
-最優先はCloudTrailの実送信値です。ElastiCacheのAPI呼び出し・要求内容はCloudTrailに記録されます。【R13】
-
-1. 更新時とロールバック時のModifyReplicationGroup、必要ならModifyCacheCluster。
-2. 各イベントのeventTime、対象ID、errorMessage、requestID、requestParameters.engineVersion、requestParameters.cacheParameterGroupName。
-3. V2のCreateCacheParameterGroupで指定されたFamilyと、実際のグループ名。
-4. その時点の6-1のCacheParameterGroupNameと、ImportValue先のExport名・値。
-5. 親から子へ渡した入力値、V2のOutputs、TemplateURLとS3オブジェクトの内容・版。
-6. 更新前の成功時、今回の提出版、現在の保存済み版を区別したテンプレート・入力値。
-
-エラー1が実際にはロールバック中だった場合は、それより前の最初の更新失敗原因を探し直してください。
-
-## 6. 復旧案：未実行・条件確認が必要
-
-通常更新の前に、親からロールバックの続行でUPDATE_ROLLBACK_COMPLETEへ戻すのが基本です。ContinueUpdateRollbackに修正テンプレートを渡す引数はありません。【R7・R8】
-
-今回の候補は、7.1を維持し、ダウングレード拒否でロールバックに失敗したRGの処理だけを必要最小限スキップすることです。
-
-操作先の親：
-
-```text
+親スタック：
 TestFclElastiCacheStack
-```
 
-スキップ指定候補（API／CLIの指定形式。実行コマンドではありません）：
+子スタックの実名：
+TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z76RB
 
-```text
+失敗リソースの論理ID：
+AwsElastiCacheReplicationGroup
+
+リソース型：AWS::ElastiCache::ReplicationGroup。
+親の現在状態：UPDATE_ROLLBACK_FAILED。
+該当RGのロールバック時エラー：Cannot modify redis from 7.1.0 to redis version 6.2.6。
+実機：EngineVersion 7.1.0、適用グループdefault.redis7.cluster.on。
+管理定義：EngineVersion 6.2.6、管理対象の旧PGのFamilyはredis6.x。
+該当RGリソース行の現在ステータス、新規V2子スタックの現在状態、他の失敗の有無は未確認。
+
+2. 指定形式の判定
+
+正式なパラメータ名はResourcesToSkip。
+公式のネスト内リソース指定形式は、NestedStackName.ResourceLogicalID。【S1】
+
+今回の候補は次のとおり。下の行全体が1つの値であり、途中に改行・空白を入れない。
+
 TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z76RB.AwsElastiCacheReplicationGroup
-```
 
-実行前の確認条件：
+画面上で自動的に折り返されることは問題ない。実際の入力に改行を含めない。
+子スタックの実名と、親テンプレートにある子スタックの論理IDは区別する。
 
-- 該当RGのリソース行が、ロールバック自体の失敗を理由とするUPDATE_FAILEDであること。過去のエラーに論理IDが出たことだけで確定しない。【R8】
-- 実機7.1・default.redis7.cluster.onの適用状態と稼働状態を確認する。
-- V2子スタックの状態、V2の物理名、他キャッシュでの使用、Export参照を確認する。対象RGはV2を使っていませんが、V2全体の削除可否は未確定です。
-- 新規V2はロールバックで削除され得ます。使用中のPGは削除できないため、他の使用先や別の失敗があれば追加判断が必要です。【R14】
-- 子スタック自体を丸ごとスキップする場合は別の状態条件があります。子スタックがUPDATE_ROLLBACK_FAILEDであっても、その理由だけで子全体をスキップする指定にはしません。【R8】
+操作先のStackNameは親のTestFclElastiCacheStack。
+上記の候補は公式の指定形式・許容文字パターンに一致する。ただし、文字列が正しいことと、現在スキップ可能な状態であることは別。【S1】
 
-スキップ後も実機と管理定義の不整合は残ります。復旧後の整合化用の変更内容を用意し、EngineVersionとCacheParameterGroupName、その参照経路を実機に合わせます。【R7・R8】
-既存PGのFamilyを変更する場合は置換になります。また、Importが残るExport値は変更できません。復旧後の設計でも、この2つの条件を確認してください。【R15・R16】
-以前の3段階手順は更新可能な安定状態が前提です。今回のV2追加構成・UPDATE_ROLLBACK_FAILED状態へ、そのまま適用しないでください。
+3. スキップ対象としての必須条件
 
-## 7. AWS公式資料：URLのどこを読むか
+・AwsElastiCacheReplicationGroupの現在のリソース行がUPDATE_FAILEDであること。
+・その理由が、ロールバック自体の失敗であること。今回は6.2.6への復帰拒否と照合する。
+・親がUPDATE_ROLLBACK_FAILEDであることや、過去のエラーに論理IDが出たことだけでは、この条件を満たした証拠にならない。
+・対象は必要最小限とする。今回はRG1件を候補としているが、他の失敗の有無は別途確認する。【S1】
 
-### R1：Redis 7.1とパラメータグループFamilyの互換性
+4. 子スタックのDELETE状態条件との違い
 
-- 資料：Parameter management in ElastiCache。
-- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ParameterGroups.Management.html
-- 記載箇所：ページ冒頭の箇条書き。Redis OSSのFamily互換性を説明する段落。
-- ページ内検索：`7.1`。
-- 確認できること：Redis OSS 7.1にはRedis OSS 7 familyのグループを使用する必要がある。現在のグループから変更する際の条件付き変更可能なパラメータや、反映条件も同じページに説明がある。
+公式のDELETE_IN_PROGRESS／DELETE_COMPLETE／DELETE_FAILEDという条件は、AWS::CloudFormation::Stackリソース自体をスキップする場合の条件。
 
-### R2：更新失敗時は更新前の構成へロールバックする
+今回の指定は、子スタック内のAWS::ElastiCache::ReplicationGroupをスキップするもの。
+したがって、今回のRG指定のために、子スタック自身がDELETE系状態である必要はない。
+一方、子スタックがUPDATE_ROLLBACK_FAILEDであっても、それだけを理由に子全体をスキップしてよいとは判断しない。【S1】
 
-- 資料：Monitor the progress of a stack update。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-monitor-stack.html
-- 記載箇所：Events generated when a resource update fails。
-- ページ内検索：`configurations before the update`。
-- 確認できること：更新が失敗すると、更新したリソースを更新前の構成へ戻す。
+5. スキップ後の状態
 
-### R3：ReplicationGroupのエンジンダウングレード制約と適用グループ指定
+以下は、スキップ指定が受理され、残るロールバック処理も成功した場合の想定。
 
-- 資料：AWS::ElastiCache::ReplicationGroup。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-replicationgroup.html
-- 記載箇所①：Properties → EngineVersionのImportant。
-- ページ内検索①：`cannot downgrade`。
-- 確認できること①：既存グループのエンジンダウングレードはできない。
-- 記載箇所②：Properties → CacheParameterGroupName。
-- ページ内検索②：`CacheParameterGroupName`。
-- 確認できること②：適用するパラメータグループ名を指定する項目。Familyそのものはこのプロパティではない。
+対象RGのリソース行：
+・CloudFormationがUPDATE_COMPLETEに設定する。【S1】【S2】
+・これはスキップ扱いで状態を進めることを意味し、実機と管理定義の整合完了ではない。
 
-### R4：RequiresRecreation=Neverの意味
+既存Redis子スタック自身：
+・親からの続行により、子もロールバックの対象になる。
+・残るロールバックが成功した場合、UPDATE_ROLLBACK_COMPLETEを想定する。
+・この子スタック自身の状態と、親に表示されるAWS::CloudFormation::Stackのリソース行を混同しない。【S2】【S3】
 
-- 資料：ResourceTargetDefinition。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceTargetDefinition.html
-- 記載箇所：Contents → RequiresRecreation。
-- ページ内検索：`RequiresRecreation`。
-- 確認できること：プロパティ変更による再作成要否を表す。BeforeValueFromの説明も同じページにある。
+親スタック：
+・全体の続行が成功すればUPDATE_ROLLBACK_COMPLETEになる。【S1】【S2】
+・UPDATE_COMPLETEになることを、今回の親のロールバック完了条件にはしない。
 
-### R5：変更セットは更新成功を保証しない
+親で想定する流れ：
 
-- 資料：Update CloudFormation stacks using change sets。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html
-- 記載箇所：Important。
-- ページ内検索：`don't guarantee`。
-- 確認できること：事前検証があっても、サービス固有制約等による実行時の失敗は発生し得る。
+UPDATE_ROLLBACK_FAILED
+→ UPDATE_ROLLBACK_IN_PROGRESS
+→ 必要に応じてUPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS
+→ UPDATE_ROLLBACK_COMPLETE
 
-### R6：ネスト変更セットのクロススタック参照の制限
+中間状態の表示は処理内容による。cleanupは、失敗した更新で新規作成したリソース等の後片付けを示す。【S3】
 
-- 資料：Create a change set for a CloudFormation stack。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-create.html
-- 記載箇所：Create a change set (console)のSubmit手順直後にあるNote。
-- ページ内検索：`cross-stack references`。
-- 確認できること：ネストされたスタックのプロパティ単位変更セットでは、クロススタック参照を解決しない。
-- 今回への限定：表示制限の根拠にはなるが、今回の旧PG選択経路をこれだけで確定しない。
+6. 今回、保証できないこと・復旧後に必要なこと
 
-### R7：UPDATE_ROLLBACK_FAILEDからの公式復旧と、スキップ後の不整合
+・RGを1件スキップしただけで、親・子すべての復旧成功が保証されるわけではない。
+・V2の削除等、残るロールバック処理が別途失敗すれば、再び停止する可能性がある。
+・対象RGはdefault.redis7.cluster.onを使用しているが、V2の他キャッシュでの使用・Export参照・現在状態は別に確認する。
+・今回の方針は、対象RGを6系へ戻す処理を省略し、7.1を維持して復旧すること。実機のバージョン・適用グループ・稼働状態は実行後にも確認する。
+・スキップ後も管理定義との不整合は残る。無関係な通常更新を先に行わず、復旧後の整合化用の変更内容を用意する。【S1】【S2】
 
-- 資料：Continue rolling back an update。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-continueupdaterollback.html
-- 記載箇所：ページ冒頭、コンソールでの続行手順、その中のWarning。
-- ページ内検索：`UPDATE_ROLLBACK_FAILED`、`Warning`、`inconsistent`。
-- 確認できること：通常更新の前にロールバックを完了させる。スキップ後は実機とテンプレートが不一致になるため、次の更新までに整合が必要。
+現場AIには、まず現在のRGリソース行とV2子の状態を照合し、候補の成立条件・残る停止要因・復旧後の確認項目を返してほしい。未確認情報を推測で補完しない。
 
-### R8：ResourcesToSkipの条件・ネストの指定形式・操作先
+7. AWS公式資料と記載場所
 
-- 資料：ContinueUpdateRollback API。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ContinueUpdateRollback.html
-- 記載箇所①：Request Parameters → ResourcesToSkip.member.N、そのImportantとNote。
-- ページ内検索①：`ResourcesToSkip`。
-- 確認できること①：ロールバック失敗によるUPDATE_FAILEDだけを対象にし、最小限を指定。ネスト内はNestedStackName.ResourceLogicalID。子スタック本体を指定する場合は、その子がDELETE_IN_PROGRESS／DELETE_COMPLETE／DELETE_FAILEDであるという別条件がある。
-- 記載箇所②：Request Parameters → StackNameのNote。
-- ページ内検索②：`StackName`。
-- 確認できること②：操作先は子ではなく親。引数一覧にTemplateBody／TemplateURLはなく、修正版テンプレートをこの操作へ渡す仕様ではない。
+【S1】ContinueUpdateRollback API
+URL：
+https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ContinueUpdateRollback.html
 
-### R9：writeOnlyPropertiesの公式定義
+確認箇所①：ページ冒頭。
+確認できること：UPDATE_ROLLBACK_FAILEDからUPDATE_ROLLBACK_COMPLETEへロールバックを続行するAPI。
 
-- 資料：Resource type schema。
-- URL：https://docs.aws.amazon.com/cloudformation-cli/latest/userguide/resource-type-schema.html
-- 記載箇所：Properties → writeOnlyProperties。
-- ページ内検索：`writeOnlyProperties`。
-- 確認できること：設定はできるが、CloudFormationのリソースプロバイダーのread／listでは値を返さない項目。ElastiCache自体で実値を参照できないという意味ではない。
+確認箇所②：Request Parameters → ResourcesToSkip.member.N、そのImportantとNote。
+ページ内検索：ResourcesToSkip。
+確認できること：
+・スキップできるのは、ロールバック失敗によりUPDATE_FAILEDとなったリソース。
+・対象は必要最小限。
+・指定したリソースをUPDATE_COMPLETEへ設定する。
+・ネスト内の形式はNestedStackName.ResourceLogicalID。
+・DELETE系状態の条件は、子スタックコンテナ自体をスキップする場合に適用。
+・スキップ後はテンプレートとの不整合が残る。
+同欄のPatternには、改行・空白は含まれない。
 
-### R10：東京公式スキーマで確認した実際の指定
+確認箇所③：Request Parameters → StackNameのNote。
+ページ内検索：StackName。
+確認できること：子ではなく親スタックを操作先に指定する。
 
-- 配布案内URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/resource-type-schemas.html
-- 配布案内の確認箇所：Asia Pacific (Tokyo)／ap-northeast-1。
-- ZIPのURL：https://schema.cloudformation.ap-northeast-1.amazonaws.com/CloudformationSchema.zip
-- ZIP内のファイル：aws-elasticache-replicationgroup.json。
-- JSON内の検索語：`writeOnlyProperties`。
-- 配列内で確認した指定：`/properties/EngineVersion`、`/properties/CacheParameterGroupName`。
-- 確認日：2026-11-18。ZIPのLast-Modified：2026-11-17 21:56:05 GMT。
-- ZIPのSHA-256：9789658181e07957b5928e6d7b7c18bd795730c62955292a2653a9fec373a97e。
-- 限定：今回の対象リージョン・利用中の型定義との一致は現場で照合する。この指定だけでは、実際のAPI送信値まで確定しない。
+【S2】Continue rolling back an update
+URL：
+https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-continueupdaterollback.html
 
-### R11：リソース全体のドリフト検出対応
+確認箇所①：ページ冒頭の状態説明と、ネストスタックに関するNote。
+ページ内検索：UPDATE_ROLLBACK_COMPLETE。
+確認できること：親のロールバック続行では子もロールバック対象になる。
 
-- 資料：Resource type support。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/resource-import-supported-resources.html
-- 記載箇所：表のAWS::ElastiCache::ReplicationGroup行とAWS::ElastiCache::ParameterGroup行、Drift detection列。
-- ページ内検索：`AWS::ElastiCache::ReplicationGroup`、`AWS::ElastiCache::ParameterGroup`。
-- 確認できること：両方ともYes。R9・R10の項目単位の制限と区別する。
+確認箇所②：コンソールでの続行手順中、スキップ説明直後のWarning。
+ページ内検索：Warning、inconsistent。
+確認できること：スキップしたリソースはUPDATE_COMPLETEになるが、管理定義との整合は別途必要。
 
-### R12：従来型とdrift-aware型の比較方式、write-only項目の扱い
+【S3】View CloudFormation stack events
+URL：
+https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/view-stack-events.html
 
-- 資料：Using drift-aware change sets。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/drift-aware-change-sets.html
-- 記載箇所①：冒頭の従来型との比較、Considerations → Write-only properties。
-- ページ内検索①：`Write-only properties`。
-- 確認できること①：従来型は前回・今回のテンプレート比較、drift-aware型は実環境・前回デプロイ・希望状態の比較。ただしwrite-only項目は前回デプロイ値との比較になる。
-- 記載箇所②：Using drift-aware change sets (AWS CLI) → Reviewing drift-aware change sets。
-- ページ内検索②：`BeforeValueFrom`。
-- 確認できること②：before値の出所がACTUAL_STATEかPREVIOUS_DEPLOYMENT_STATEかを判別する。
+確認箇所：ページ内の状態コード説明表。
+ページ内検索：UPDATE_ROLLBACK_IN_PROGRESS、UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS、UPDATE_ROLLBACK_COMPLETE。
+確認できること：
+・ロールバック処理中、後片付け中、完了の意味を区別できる。
+・UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESSは、失敗した更新後の新規リソース削除等が継続している状態。
 
-### R13：実際のAPI要求をCloudTrailで確認する
-
-- 資料：Logging Amazon ElastiCache API calls with AWS CloudTrail。
-- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/logging-using-cloudtrail.html
-- 記載箇所：冒頭、Amazon ElastiCache information in CloudTrail、後半のログエントリー例。
-- ページ内検索：`Event history`、`requestParameters`。
-- 確認できること：ElastiCacheのAPI呼び出しと要求内容が記録される。証跡未設定でも最近のイベントはイベント履歴で確認できる。
-
-### R14：V2のロールバック削除を判断する際の制約
-
-- 資料：DeleteCacheParameterGroup。
-- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_DeleteCacheParameterGroup.html
-- 記載箇所：ページ冒頭。
-- ページ内検索：`associated with any cache clusters`。
-- 確認できること：キャッシュに関連付いているグループは削除できない。デフォルトグループも削除できない。
-
-### R15：ParameterGroupのFamily変更と、!Refが返す値
-
-- 資料：AWS::ElastiCache::ParameterGroup。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-parametergroup.html
-- 記載箇所①：Properties → CacheParameterGroupFamilyのUpdate requires。
-- ページ内検索①：`CacheParameterGroupFamily`。
-- 確認できること①：Family変更はReplacement。
-- 記載箇所②：Return values → Ref。
-- ページ内検索②：`Ref`。
-- 確認できること②：!Refはパラメータグループのリソース名を返す。
-
-### R16：Importが残るExport値の変更制約
-
-- 資料：Get exported outputs from a deployed CloudFormation stack。
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html
-- 記載箇所①：Considerationsの制約事項。
-- ページ内検索①：`All the imports`。
-- 確認できること①：参照するImportをすべて外すまで、Export値の変更やExport元スタックの削除はできない。
-- 記載箇所②：Listing stacks that import an exported output value。
-- ページ内検索②：`Export Name`。
-- 確認できること②：コンソールのExportsからExport名を開き、Importしているスタックを確認できる。
-
-## 8. 現場AIに返してほしい内容
-
-1. 6-1のCacheParameterGroupName → Import／親入力 → Export値 → 実グループ名／Family、という参照経路。確認できたファイル・キーを示す。
-2. エラー1とエラー2の時系列・API送信値。資料がなければ未確認とする。
-3. 上記スキップ候補が、現在のリソース状態とR8の条件を満たすか。
-4. V2の削除処理や他の失敗も含めた、親からの復旧手順案と停止条件。
-5. 復旧後、7.1と適用グループへ管理定義を整合させる変更箇所。
-
-結論ごとに、利用者報告・公式根拠R番号・構成からの推論のどれかを示してください。追加情報がない部分を推測で埋めず、必要な確認項目を挙げてください。
+本件では公式資料との照合と資料作成のみを行った。現場のAWS環境への接続、ロールバック続行、スキップ操作は実施していない。
