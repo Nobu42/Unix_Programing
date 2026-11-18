@@ -1,128 +1,46 @@
-# CloudTrailのPG名の有無と、互換性エラーの因果関係
-
-確認日：2026-11-18
-用途：現場AIチャットへの追加引継ぎ。
-
-AWS公式仕様を今回の事象に当てはめた分析です。現場のAWS環境へ接続せず、実ログも取得していません。「記録されていた場合」という条件で整理しています。AWS更新・ロールバック続行は実施していません。
-
-## 1. 最初にPG名の綴りを確認する
-
-今回の質問と、以前共有されたPG名には違いがあります。
-
-```text
-今回の質問：testf-awsel-8s50v98v1ty
-以前の共有：testf-awsel-8s50v98vj1ty
-                                ↑ 以前の名前にはjがある
-```
-
-この2つを自動的に同一PGとは扱いません。生のCloudTrail JSONにある名前を正とし、その名前のPGのFamilyと、Export値を照合してください。
-以下では、今回提示されたtestf-awsel-8s50v98v1tyが記録されていた場合を説明します。そのFamilyがredis6.xであること自体は、今回まだ確認できていません。
-
-## 2. PG名が記録されていた場合に確定できること
-
-対象イベントが次の内容なら、まず「その1回の要求で、記録された名前のPGを適用先として明示指定した」と説明できます。【R1・R2】
-
-```text
-eventSource = elasticache.amazonaws.com
-eventName = ModifyReplicationGroup
-requestParameters.replicationGroupId = 対象RGの実ID
-requestParameters.cacheParameterGroupName = testf-awsel-8s50v98v1ty
-```
-
-- CloudTrailのrequestParametersは、要求で送られたパラメータを表す。【R1】
-- ModifyReplicationGroupのCacheParameterGroupNameは、RG内のクラスターへ適用するPG名の指定である。【R2】
-- したがって、上記の記録はPG名を指定した要求の証拠になる。
-- 適用成功や、実際にPGが切り替わった証拠ではない。同じ名前の再指定という場合もあるため、名前の記録だけで実環境に変更が発生したとは判断しない。
-- PG名だけでは、Family、エラーの発生理由、CloudFormation起因であることまでは確定しない。
-
-## 3. Incompatible cache parameter groupとの直接のつながり
-
-### 公式仕様
-
-AWS公式は、PGのFamilyがキャッシュのエンジンとバージョンに適合する必要があると説明しています。【R3】
-PG名とFamilyは別項目です。名前から推測せず、当該PGの情報、作成記録、サービスのエラー応答などで確認します。【R4・R5】
-
-### 同じ要求で次の証拠が揃う場合
-
-1. 対象RGのModifyReplicationGroupに、上記PG名が記録されている。
-2. 同じイベントのerrorMessageに、次のようなFamilyの不一致が記録されている。
-
-```text
-Incompatible cache parameter group.
-The cache has Parameter Group Family redis7.
-The requested cache parameter group has Parameter Group Family redis6.x.
-```
-
-3. 対象RG、時刻、可能ならElastiCacheのRequest IDが、CloudFormationの失敗イベントと対応する。
-4. 呼び出し主体やCloudFormationの実行記録も照合でき、手動操作など別の要求と区別できる。
-
-この条件なら、次の直接原因を説明できます。
-
-```text
-redis7のキャッシュに対し、redis6.xのPGを適用する要求が送られた。
-ElastiCacheはFamilyの互換性が合わないため、その要求を拒否した。
-対応するCloudFormationのリソース更新が失敗した。
-```
-
-これは「記録された要求・サービスのエラー」と「Familyの適合が必要という公式仕様」を組み合わせた説明です。【R1・R2・R3】
-上記のエラー文は利用者から共有されたものであり、今回実ログで確認したものではありません。
-
-### 証拠が少ない場合の限界
-
-| 確認できた内容 | 説明できる範囲 |
-| --- | --- |
-| PG名の記録だけ | その名前を適用先として要求した。Familyの不一致までは未確定 |
-| PG名＋同じ要求の短いIncompatible cache parameter group | その要求がPG互換性エラーで拒否された。Familyの具体値は追加照合が必要 |
-| PG名＋同じ要求のredis7／redis6.xを明示したエラー | 要求先と要求PGのFamily不一致による拒否を、サービス応答として説明できる |
-| さらにCloudFormationの失敗と対象・時刻・要求IDが対応 | 今回のCloudFormation更新失敗との直接のつながりを説明できる |
-
-なぜCloudFormationが旧Exportを選んだかは、CloudTrailだけでは確定できません。CloudTrailの解決済みPG名と、6-1のImportValue式、親入力、Export値を別途照合します。
-また、このPG互換性エラーだけで、その後のダウングレード要求によるロールバック失敗まで証明したことにはなりません。ロールバック時のengineVersion・エラーは別要求として確認します。
-
-## 4. cacheParameterGroupNameが存在しなかった場合
-
-**1イベントにキーがないことだけから「CloudFormationの更新全体にPG指定の要求がなかった」とは判断できません。**
-記録の状態を分けて説明します。
-
-| 確認した状態 | 判断できること |
-| --- | --- |
-| 生JSONのrequestParametersに、対象RGや他の値はあるがPG名キーだけがない | 確定するのは「このイベントにPG名の明示指定が記録されていない」こと |
-| 加えて、その記録が完全で、対象・キー表記・省略の有無に問題がないと確認できる | その1回のAPIではPG名を明示指定しなかった、と読むことは公式定義と整合する解釈 |
-| requestParameters全体が欠落・null、または原本の完全性が不明 | PG名が送られたかは、この記録だけでは判断できない |
-| CSV、一覧、抜粋、AIの要約だけを見た | 原本のEvent record JSONを確認してから判断する |
-| 1つのModifyReplicationGroupにPG名がなかった | 別の変更要求、再試行、更新時とロールバック時まで「指定なし」とは広げられない |
-
-ModifyReplicationGroupのCacheParameterGroupNameはRequired: Noであり、PG名を省略した要求もAPI仕様上あり得ます。【R2】
-一方、ログは1イベントが1要求を表すため、単一イベントはCloudFormationの一連の処理全体の証明にはなりません。【R6】
-
-ここでの「指定しなかった」は、その呼び出しの明示的な引数についての解釈です。実環境のPGが何だったか、暗黙のサービス処理がどうだったか、前後でPGが変わったかまでは証明しません。
-キーの欠落を「default.redis7.cluster.onを指定した」「V2へ切り替えた」と読み替えることもできません。
-
-## 5. CloudTrailの記録制限をどう考慮するか
-
-### 公式に確認できる省略仕様
-
-CloudTrailのrequestParametersにはサイズ上限があり、通常の説明では100KB超で同フィールドの内容が省略されます。最大1MBのイベントサイズに設定したイベントデータストアには別条件があります。【R1】
-
-重要なのは、これはrequestParametersの内容全体の省略についての説明だという点です。
-
-- requestParameters全体が失われている場合は、サイズ制限などの記録事情を確認する。
-- 小さなrequestParametersオブジェクト内にengineVersionなどが残り、PG名キーだけがない場合、それを100KB制限で自動的に説明しない。
-- 取得元、原本、加工・抽出の有無を確認する。
-- 参照した公式資料では、ElastiCacheのcacheParameterGroupNameだけを常時マスク・省略する個別仕様は確認できていない。
-
-したがって、次のどちらの断定も避けます。
-
-```text
-キーがないので、CloudFormation更新全体にPG指定は一切なかった。
-キーがないのは、CloudTrailがPG名だけを必ず隠すからだ。
-```
-
-CloudFormationのwriteOnlyPropertiesは、リソースプロバイダーの読取応答に値を返さないというスキーマ上の扱いです。それ自体は、CloudTrailがこのPG名を省略する根拠にはなりません。【R7・R1】
-
-## 6. 現場で追加確認する順番
-
-1. Event recordの生JSONを保存し、今回と以前で異なるPG名の綴りを確定する。
-2. イベントのアカウント・リージョン・対象RG・更新／ロールバックの時刻を確認する。
-3. requestParameters全体と、cacheParameterGroupName、engineVersionの実際の有無・値を控える。
-4. errorCode、errorMessage、requestID、eventIDを控える。エラーがresponseElementsに記録されるサービスもあるため、その中も確認する。【R1】
+"No.","分類","調べたこと","参考URL","確認箇所"
+"1","CloudFormation：ネスト・参照","子テンプレートをS3に置き、親のTemplateURLから参照する方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-stack.html","Properties → TemplateURL・Parameters"
+"2","CloudFormation：ネスト・参照","ネストした子スタックをルートスタックから更新する方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-nested-stacks.html","Performing stack operations on nested stacks"
+"3","CloudFormation：ネスト・参照","親から子の変更セットまで確認・実行する方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/change-sets-for-nested-stacks.html","Working with change sets for nested stacks (console)"
+"4","CloudFormation：ネスト・参照","ImportValueが参照するExport名と、参照中のExport値の変更制約","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-importvalue.html","冒頭・Note・Parameters・Supported functions"
+"5","CloudFormation：ネスト・参照","Subによる変数展開と、PGの参照名の組み立て","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-sub.html","Declaration・Parameters → String"
+"6","CloudFormation：ネスト・参照","Joinによる文字列連結と、旧Export名に解決される理由","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-join.html","Parameters → delimiter・Return value"
+"7","CloudFormation：ネスト・参照","Export名・値・参照先スタックの確認方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html","Considerations・Listing exported output values・Listing stacks that import an exported output value"
+"8","CloudFormation：ネスト・参照","旧ExportをImportしているスタックを調べるAPI","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ListImports.html","Request Parameters → ExportName・Response Elements → Imports"
+"9","CloudFormation：ネスト・参照","Export使用中エラーを、Import側の先行更新で解消する考え方","https://repost.aws/knowledge-center/cloudformation-stack-export-name-error","Resolution"
+"10","CloudFormation：ネスト・参照","DependsOnによる処理順序の指定と、その役割","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-attribute-dependson.html","冒頭の作成・更新・削除の順序制御"
+"11","CloudFormation：変更セット","変更セットで確認できる範囲と、更新成功を保証しない点","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html","Important"
+"12","CloudFormation：変更セット","変更セット作成手順と、ネスト時のクロススタック参照の表示制限","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-create.html","Create a change set for nested stacks (console) → Submit直後のNote"
+"13","CloudFormation：変更セット","プロパティごとの変更前後を画面で確認する方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-view.html","Property-level changes → View details"
+"14","CloudFormation：変更セット","APIで変更セットの詳細なプロパティ値を取得する指定","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_DescribeChangeSet.html","Request Parameters → IncludePropertyValues"
+"15","CloudFormation：変更セット","変更前後のリソース設定を示すBeforeContext・AfterContext","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChange.html","Contents → BeforeContext・AfterContext"
+"16","CloudFormation：変更セット","Dynamic評価で実行前に値を確定できない場合","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChangeDetail.html","Contents → Evaluation"
+"17","CloudFormation：変更セット","RequiresRecreation=Neverと、変更前の値の出所の意味","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceTargetDefinition.html","Contents → RequiresRecreation・BeforeValueFrom"
+"18","CloudFormation：復旧・置換","更新失敗時に更新前の構成へロールバックする動作","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-monitor-stack.html","Events generated when a resource update fails"
+"19","CloudFormation：復旧・置換","UPDATE_ROLLBACK_FAILEDからの復旧と、スキップ後の整合化","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-continueupdaterollback.html","冒頭・ロールバック続行手順・スキップ説明のWarning"
+"20","CloudFormation：復旧・置換","ResourcesToSkipの指定形式・対象条件・スキップ後の状態","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ContinueUpdateRollback.html","Request Parameters → ResourcesToSkip・StackName"
+"21","CloudFormation：復旧・置換","ロールバック中・後片付け中・完了のステータスの違い","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/view-stack-events.html","状態コードの説明表"
+"22","CloudFormation：復旧・置換","置換後の旧リソースを保持・削除する設定","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-attribute-updatereplacepolicy.html","冒頭・UpdateReplacePolicy options → Delete・Retain"
+"23","CloudFormation：ElastiCache定義","適用PG・エンジンの指定と、ReplicationGroupId変更時の置換","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-replicationgroup.html","Properties → CacheParameterGroupName・EngineVersion・ReplicationGroupId"
+"24","CloudFormation：ElastiCache定義","PGのFamily変更による置換と、Refが返すPG名","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-parametergroup.html","Properties → CacheParameterGroupFamily・Return values → Ref"
+"25","CloudFormation：ドリフト","writeOnlyPropertiesの定義と、ドリフト確認に使う読取値の制限","https://docs.aws.amazon.com/cloudformation-cli/latest/userguide/resource-type-schema.html","Properties → writeOnlyProperties"
+"26","CloudFormation：ドリフト","リージョン別の公式リソーススキーマの入手先","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/resource-type-schemas.html","Asia Pacific (Tokyo)／ap-northeast-1"
+"27","CloudFormation：ドリフト","東京スキーマのEngineVersion・CacheParameterGroupNameのwrite-only指定","https://schema.cloudformation.ap-northeast-1.amazonaws.com/CloudformationSchema.zip","aws-elasticache-replicationgroup.json → writeOnlyProperties（2026-11-18確認時）"
+"28","CloudFormation：ドリフト","ReplicationGroup・ParameterGroupのドリフト検出への対応可否","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/resource-import-supported-resources.html","各リソースの行 → Drift detection列"
+"29","CloudFormation：ドリフト","drift-aware変更セットの比較方法と、write-only項目の扱い","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/drift-aware-change-sets.html","Considerations → Write-only properties・Reviewing drift-aware change sets"
+"30","CloudFormation：認証情報","CloudFormationが操作に使うサービスロール・一時認証情報","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-iam-servicerole.html","冒頭のサービスロールと既定動作の説明"
+"31","ElastiCache：PG・更新","Redis 7.1とPG Familyの互換性、設定値の反映条件","https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ParameterGroups.Management.html","冒頭のFamily互換性・パラメータ反映条件の説明"
+"32","ElastiCache：PG・更新","PGのFamilyがエンジン・バージョンに適合する必要があること","https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ParameterGroups.Creating.html","Creating an ElastiCache parameter group (Console) → 手順4 Family"
+"33","ElastiCache：PG・更新","RG変更時のPG名・エンジン指定、任意項目、ダウングレード禁止","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyReplicationGroup.html","Request Parameters → CacheParameterGroupName・EngineVersion・ApplyImmediately"
+"34","ElastiCache：PG・更新","PG名とFamilyが別の情報として保持されること","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CacheParameterGroup.html","Contents → CacheParameterGroupName・CacheParameterGroupFamily"
+"35","ElastiCache：PG・更新","特定のPG名を指定してFamilyなどの情報を取得するAPI","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_DescribeCacheParameterGroups.html","Request Parameters → CacheParameterGroupName・Response Elements"
+"36","ElastiCache：PG・更新","利用中のPG・デフォルトPGを削除できない制約","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_DeleteCacheParameterGroup.html","冒頭の削除制約"
+"37","ElastiCache：イベントの区別","クラスター単位の変更APIと、PG名・エンジンの入力項目","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyCacheCluster.html","Request Parameters → CacheClusterId・CacheParameterGroupName・EngineVersion"
+"38","ElastiCache：イベントの区別","RG作成APIを既存RGの更新と区別するための入力項目","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CreateReplicationGroup.html","Request Parameters → CacheParameterGroupName・EngineVersion"
+"39","ElastiCache：イベントの区別","PG作成イベントでPG名・Familyを確認する方法","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CreateCacheParameterGroup.html","Request Parameters → CacheParameterGroupName・CacheParameterGroupFamily"
+"40","ElastiCache：イベントの区別","PG内の設定変更と、RGへのPG関連付け変更の違い","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyCacheParameterGroup.html","Request Parameters → CacheParameterGroupName・ParameterNameValues"
+"41","CloudTrail","ElastiCache APIの記録、1要求と1イベントの関係、Describe応答の扱い","https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/logging-using-cloudtrail.html","Amazon ElastiCache information in CloudTrail・Understanding Amazon ElastiCache log file entries"
+"42","CloudTrail","画面でのイベント検索・JSON確認、1属性検索・90日履歴の制約","https://docs.aws.amazon.com/awscloudtrail/latest/userguide/view-cloudtrail-events-console.html","Filtering CloudTrail events・Viewing details for an event・冒頭"
+"43","CloudTrail","要求値とエラーの読み方、ID・UTC時刻、要求内容の省略制限","https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-record-contents.html","requestParameters・errorMessage・requestID・eventTime・Field truncation order"
+"44","CloudTrail","CloudFormation操作の記録と、スタック入力値が記録されない制約","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-api-logging-cloudtrail.html","Understanding CloudFormation log file entries → Note"
+"45","CloudTrail","呼び出し主体・利用ロール・AWSサービスからの要求の確認","https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-user-identity.html","Fields → type・arn・invokedBy・sessionContext → sessionIssuer"
