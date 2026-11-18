@@ -1,46 +1,128 @@
-"No.","分類","調べたこと","参考URL","確認箇所"
-"1","CloudFormation：ネスト・参照","子テンプレートをS3に置き、親のTemplateURLから参照する方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-stack.html","Properties → TemplateURL・Parameters"
-"2","CloudFormation：ネスト・参照","ネストした子スタックをルートスタックから更新する方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-nested-stacks.html","Performing stack operations on nested stacks"
-"3","CloudFormation：ネスト・参照","親から子の変更セットまで確認・実行する方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/change-sets-for-nested-stacks.html","Working with change sets for nested stacks (console)"
-"4","CloudFormation：ネスト・参照","ImportValueが参照するExport名と、参照中のExport値の変更制約","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-importvalue.html","冒頭・Note・Parameters・Supported functions"
-"5","CloudFormation：ネスト・参照","Subによる変数展開と、PGの参照名の組み立て","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-sub.html","Declaration・Parameters → String"
-"6","CloudFormation：ネスト・参照","Joinによる文字列連結と、旧Export名に解決される理由","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-join.html","Parameters → delimiter・Return value"
-"7","CloudFormation：ネスト・参照","Export名・値・参照先スタックの確認方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html","Considerations・Listing exported output values・Listing stacks that import an exported output value"
-"8","CloudFormation：ネスト・参照","旧ExportをImportしているスタックを調べるAPI","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ListImports.html","Request Parameters → ExportName・Response Elements → Imports"
-"9","CloudFormation：ネスト・参照","Export使用中エラーを、Import側の先行更新で解消する考え方","https://repost.aws/knowledge-center/cloudformation-stack-export-name-error","Resolution"
-"10","CloudFormation：ネスト・参照","DependsOnによる処理順序の指定と、その役割","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-attribute-dependson.html","冒頭の作成・更新・削除の順序制御"
-"11","CloudFormation：変更セット","変更セットで確認できる範囲と、更新成功を保証しない点","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html","Important"
-"12","CloudFormation：変更セット","変更セット作成手順と、ネスト時のクロススタック参照の表示制限","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-create.html","Create a change set for nested stacks (console) → Submit直後のNote"
-"13","CloudFormation：変更セット","プロパティごとの変更前後を画面で確認する方法","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-view.html","Property-level changes → View details"
-"14","CloudFormation：変更セット","APIで変更セットの詳細なプロパティ値を取得する指定","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_DescribeChangeSet.html","Request Parameters → IncludePropertyValues"
-"15","CloudFormation：変更セット","変更前後のリソース設定を示すBeforeContext・AfterContext","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChange.html","Contents → BeforeContext・AfterContext"
-"16","CloudFormation：変更セット","Dynamic評価で実行前に値を確定できない場合","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChangeDetail.html","Contents → Evaluation"
-"17","CloudFormation：変更セット","RequiresRecreation=Neverと、変更前の値の出所の意味","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceTargetDefinition.html","Contents → RequiresRecreation・BeforeValueFrom"
-"18","CloudFormation：復旧・置換","更新失敗時に更新前の構成へロールバックする動作","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-monitor-stack.html","Events generated when a resource update fails"
-"19","CloudFormation：復旧・置換","UPDATE_ROLLBACK_FAILEDからの復旧と、スキップ後の整合化","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-continueupdaterollback.html","冒頭・ロールバック続行手順・スキップ説明のWarning"
-"20","CloudFormation：復旧・置換","ResourcesToSkipの指定形式・対象条件・スキップ後の状態","https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ContinueUpdateRollback.html","Request Parameters → ResourcesToSkip・StackName"
-"21","CloudFormation：復旧・置換","ロールバック中・後片付け中・完了のステータスの違い","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/view-stack-events.html","状態コードの説明表"
-"22","CloudFormation：復旧・置換","置換後の旧リソースを保持・削除する設定","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-attribute-updatereplacepolicy.html","冒頭・UpdateReplacePolicy options → Delete・Retain"
-"23","CloudFormation：ElastiCache定義","適用PG・エンジンの指定と、ReplicationGroupId変更時の置換","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-replicationgroup.html","Properties → CacheParameterGroupName・EngineVersion・ReplicationGroupId"
-"24","CloudFormation：ElastiCache定義","PGのFamily変更による置換と、Refが返すPG名","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-parametergroup.html","Properties → CacheParameterGroupFamily・Return values → Ref"
-"25","CloudFormation：ドリフト","writeOnlyPropertiesの定義と、ドリフト確認に使う読取値の制限","https://docs.aws.amazon.com/cloudformation-cli/latest/userguide/resource-type-schema.html","Properties → writeOnlyProperties"
-"26","CloudFormation：ドリフト","リージョン別の公式リソーススキーマの入手先","https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/resource-type-schemas.html","Asia Pacific (Tokyo)／ap-northeast-1"
-"27","CloudFormation：ドリフト","東京スキーマのEngineVersion・CacheParameterGroupNameのwrite-only指定","https://schema.cloudformation.ap-northeast-1.amazonaws.com/CloudformationSchema.zip","aws-elasticache-replicationgroup.json → writeOnlyProperties（2026-11-18確認時）"
-"28","CloudFormation：ドリフト","ReplicationGroup・ParameterGroupのドリフト検出への対応可否","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/resource-import-supported-resources.html","各リソースの行 → Drift detection列"
-"29","CloudFormation：ドリフト","drift-aware変更セットの比較方法と、write-only項目の扱い","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/drift-aware-change-sets.html","Considerations → Write-only properties・Reviewing drift-aware change sets"
-"30","CloudFormation：認証情報","CloudFormationが操作に使うサービスロール・一時認証情報","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-iam-servicerole.html","冒頭のサービスロールと既定動作の説明"
-"31","ElastiCache：PG・更新","Redis 7.1とPG Familyの互換性、設定値の反映条件","https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ParameterGroups.Management.html","冒頭のFamily互換性・パラメータ反映条件の説明"
-"32","ElastiCache：PG・更新","PGのFamilyがエンジン・バージョンに適合する必要があること","https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ParameterGroups.Creating.html","Creating an ElastiCache parameter group (Console) → 手順4 Family"
-"33","ElastiCache：PG・更新","RG変更時のPG名・エンジン指定、任意項目、ダウングレード禁止","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyReplicationGroup.html","Request Parameters → CacheParameterGroupName・EngineVersion・ApplyImmediately"
-"34","ElastiCache：PG・更新","PG名とFamilyが別の情報として保持されること","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CacheParameterGroup.html","Contents → CacheParameterGroupName・CacheParameterGroupFamily"
-"35","ElastiCache：PG・更新","特定のPG名を指定してFamilyなどの情報を取得するAPI","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_DescribeCacheParameterGroups.html","Request Parameters → CacheParameterGroupName・Response Elements"
-"36","ElastiCache：PG・更新","利用中のPG・デフォルトPGを削除できない制約","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_DeleteCacheParameterGroup.html","冒頭の削除制約"
-"37","ElastiCache：イベントの区別","クラスター単位の変更APIと、PG名・エンジンの入力項目","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyCacheCluster.html","Request Parameters → CacheClusterId・CacheParameterGroupName・EngineVersion"
-"38","ElastiCache：イベントの区別","RG作成APIを既存RGの更新と区別するための入力項目","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CreateReplicationGroup.html","Request Parameters → CacheParameterGroupName・EngineVersion"
-"39","ElastiCache：イベントの区別","PG作成イベントでPG名・Familyを確認する方法","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CreateCacheParameterGroup.html","Request Parameters → CacheParameterGroupName・CacheParameterGroupFamily"
-"40","ElastiCache：イベントの区別","PG内の設定変更と、RGへのPG関連付け変更の違い","https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyCacheParameterGroup.html","Request Parameters → CacheParameterGroupName・ParameterNameValues"
-"41","CloudTrail","ElastiCache APIの記録、1要求と1イベントの関係、Describe応答の扱い","https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/logging-using-cloudtrail.html","Amazon ElastiCache information in CloudTrail・Understanding Amazon ElastiCache log file entries"
-"42","CloudTrail","画面でのイベント検索・JSON確認、1属性検索・90日履歴の制約","https://docs.aws.amazon.com/awscloudtrail/latest/userguide/view-cloudtrail-events-console.html","Filtering CloudTrail events・Viewing details for an event・冒頭"
-"43","CloudTrail","要求値とエラーの読み方、ID・UTC時刻、要求内容の省略制限","https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-record-contents.html","requestParameters・errorMessage・requestID・eventTime・Field truncation order"
-"44","CloudTrail","CloudFormation操作の記録と、スタック入力値が記録されない制約","https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-api-logging-cloudtrail.html","Understanding CloudFormation log file entries → Note"
-"45","CloudTrail","呼び出し主体・利用ロール・AWSサービスからの要求の確認","https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-user-identity.html","Fields → type・arn・invokedBy・sessionContext → sessionIssuer"
+# Redis／CloudFormation ロールバック失敗の復旧手順書（下書き）
+
+作成日：2026-11-18
+対象：先に障害が発生したTestFclElastiCacheStack
+作業方法：AWS Webコンソール。作業者・確認者で対象と実行内容を照合する。
+
+この資料の「元に戻す」は、Redis 7.1.0を維持し、CloudFormationをUPDATE_ROLLBACK_FAILEDからUPDATE_ROLLBACK_COMPLETEへ戻す意味です。Redisを6.2.6へ戻す手順ではありません。
+本番環境の7系PG追加作業は、別の作業として扱います。
+
+現場の実環境では未検証です。AWS環境への接続、更新、スキップ、ロールバック続行は実施していません。
+手順Aは現在状態の確認を実行条件とする復旧案です。手順Bのテンプレート整合化は、実適用版が揃ってから実行版を確定します。
+
+## 1. 到達点と作業の分け方
+
+| 区分 | 到達点 | この資料での扱い |
+| --- | --- | --- |
+| 手順A：障害状態の復旧 | 親がUPDATE_ROLLBACK_COMPLETE、Redisは7.1.0／default.redis7.cluster.onを維持 | 条件付きの具体的なコンソール手順 |
+| 手順B：管理定義の整合化 | Redis本体の定義を7.1と現在の適用PGへ合わせ、親更新を完了 | 修正方針・確認手順。実行用ファイルは未確定 |
+| 旧構造の整理 | カスタム7系PGへの切替、元のImport構造への復帰、旧PG／Exportの整理 | 必要性と影響を確認して別作業とする |
+
+スキップ後は、リソース行がUPDATE_COMPLETEになっても管理定義の不整合は残ります。無関係な通常更新を始める前に、手順Bで整合させる必要があります。【R1・R2】
+
+## 2. 共有済み情報
+
+| 項目 | 共有された値 |
+| --- | --- |
+| ルートスタック | TestFclElastiCacheStack |
+| 既存Redis子スタックの実名 | TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z76RB |
+| 子内の失敗リソース論理ID | AwsElastiCacheReplicationGroup |
+| リソース型 | AWS::ElastiCache::ReplicationGroup |
+| 親の状態 | UPDATE_ROLLBACK_FAILED |
+| ロールバック時のエラー | Cannot modify redis from 7.1.0 to redis version 6.2.6 |
+| Redisの実バージョン | 7.1.0 |
+| 実機の適用PG | default.redis7.cluster.on |
+| 管理定義のエンジン | 6.2.6 |
+| 既存6-2が管理する旧PGのFamily | redis6.x |
+| リージョン | 東京 ap-northeast-1を前提。現画面で照合する |
+
+この表は利用者からの共有情報です。作業開始時点の状態は、手順A-1〜A-3で再確認します。
+旧6系PGと、実機に適用中のdefault.redis7.cluster.onは別のグループです。旧PG自体のFamilyが7系へ変わったという意味ではありません。
+
+## 3. 実行前に埋める項目と開始条件
+
+以下が未確認のままなら、手順A-4の実行へは進みません。共有名と実画面が違う場合は、実際の名前で手順書を訂正します。
+
+| 確認項目 | 記録欄・判定 |
+| --- | --- |
+| 現場の対象AWSアカウントID | 未確認。個人学習用アカウントを流用しない |
+| 親スタックARN・現在ステータス | 未確認。対象親がUPDATE_ROLLBACK_FAILEDであること |
+| 既存Redis子スタック名・現在ステータス | 未確認。親のリソースリンクから確認 |
+| 子内RG行の現在ステータス | 未確認。ロールバック失敗によるUPDATE_FAILEDであること |
+| 子内RG行の最新Status reason | 未確認。7.1.0→6.2.6の拒否と一致すること |
+| ReplicationGroupの物理ID | 未確認。子内RG行の物理IDとElastiCacheの対象が一致すること |
+| 実エンジン・PG・稼働状態・保留中変更 | 作業時に確認。共有値から変わっていないこと |
+| 新規V2子スタック名・状態・PG物理名 | 未確認。削除済み・残存・失敗を区別する |
+| V2 PGの利用先・V2 ExportのImport先 | 未確認。ロールバックの後片付けを妨げないか確認 |
+| 他のロールバック失敗 | 未確認。ある場合は原因と対処を別途確定する |
+| 現在のCloudFormation実行ロール | 未確認。今回の復旧のために別ロールへ変更しない |
+| バックアップ・業務確認方法 | 現場の既存手順・作業方針を確認して記録 |
+| 作業者・確認者・作業日時 | 現場で記入 |
+
+指定できるのは、ロールバック失敗を理由にUPDATE_FAILEDとなったリソースです。親がUPDATE_ROLLBACK_FAILEDであることや、過去のエラーに論理IDがあることだけでは十分ではありません。【R1・R2】
+
+## 4. 手順A：ロールバック失敗状態を解消する
+
+### A-1. 対象と現在状態を保存する（読み取り）
+
+1. 現場の対象アカウントでCloudFormationを開き、東京リージョンを選ぶ。
+2. TestFclElastiCacheStackを選択し、スタックARNと現在のステータスを記録する。
+3. 「イベント」で、更新開始、最初の更新失敗、ロールバック開始、ロールバック失敗の時刻・理由を保存する。【R3】
+4. 「リソース」から既存Redis子スタックの物理IDリンクを開く。
+5. 子の「リソース」でAwsElastiCacheReplicationGroupの現在の状態・物理IDを記録する。
+6. 子の「イベント」で最新の失敗理由を確認し、ロールバック中の7.1.0→6.2.6の拒否であることを照合する。
+7. 親・既存Redis子・旧PG子・V2子それぞれのテンプレート、入力値、TemplateURLを保存する。今回の提出版と、更新前の成功版がある場合は区別して保存する。
+
+判定：親の状態またはRGの失敗理由が想定と異なる場合、A-4へ進まず手順を見直す。
+
+### A-2. Redis実機を確認する（読み取り）
+
+1. ElastiCacheで、A-1のRG物理IDと一致する対象を開く。
+2. 実エンジンが7.1.0で、適用PGがdefault.redis7.cluster.onであることを記録する。
+3. 全シャード・ノードの状態、PGの適用状態、保留中の変更、エンドポイントを記録する。
+4. 業務・接続確認は、現場で決まっている方法と担当者で実施・記録する。
+5. バックアップの状態と、復旧中に障害が発生した場合の連絡・対応方針を確認する。新規取得の要否は現場の方針に従う。
+
+判定：実機が更新中・障害中、または共有値と異なる場合、その状態への対応方針を決めてから進む。
+この手順ではRedisのダウングレードを行わない。ElastiCacheは既存RGのエンジンダウングレードを認めていない。【R4】
+
+### A-3. V2と、残るロールバックの対象を確認する（読み取り）
+
+1. 親のリソース・イベントから、今回追加されたV2子スタックの実名と現在状態を特定する。直近に相談した本番用V7とは取り違えない。
+2. V2子が残っていれば、PG物理名と、作成・削除・失敗のイベントを記録する。
+3. そのPGが、対象RG以外も含めてキャッシュに使用されていないか確認する。
+4. V2のExportが残っていれば、CloudFormationのExportsでImportしているスタックを確認する。
+5. 旧PG・旧Exportなど、その他の失敗・削除待ちも記録する。
+6. V2がロールバックにより削除され得ることを、作業者・確認者で確認する。
+
+RGのスキップだけで、親のその他のロールバック処理が止まるわけではありません。親からの続行は子にも及びます。【R2】
+利用中のPGは削除できず、Importが残るExportも削除・変更できません。【R5・R6】
+
+判定：V2の使用・参照、別の失敗など、残りの処理に未解決の問題がある場合はA-4へ進まない。PGの手動削除や追加スキップで、その場で解決したことにしない。
+
+### A-4. スキップ対象を確定する（操作直前の照合）
+
+今回の候補は、既存Redis子のRGリソース1件です。
+
+```text
+TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z76RB.AwsElastiCacheReplicationGroup
+```
+
+- 上の行全体で1つの値。途中に改行・空白を入れない。
+- 前半は子スタックの実名。親テンプレートの子スタック論理IDではない。
+- 後半は子内のRGリソース論理ID。
+- 親スタック全体や、子スタック全体をスキップする指定ではない。
+- 最新のRG行が、ロールバック失敗によるUPDATE_FAILEDであることを、再度確認する。
+- この1件以外を追加する場合は、別の失敗理由とスキップ条件を確認して手順書を改訂する。
+
+AWS公式の形式はNestedStackName.ResourceLogicalIDです。【R1】
+子スタックコンテナ自体をスキップする場合のDELETE系状態条件は、今回のRG1件の指定とは別です。
+
+### A-5. 親からロールバックを続行する（ここからAWS変更操作）
+
+1. CloudFormationで親TestFclElastiCacheStackを開く。既存Redis子を操作先にしない。【R1】
+2. 「スタックアクション／Stack actions」→「更新ロールバックの続行／Continue update rollback」を選択する。【R2】
+3. 詳細オプションの「スキップするリソース」で、A-4の1件を入力・指定する。画面の形式がこの手順と異なる場合は、入力方法を確認してから進む。
+4. 既存の実行ロールを維持する。RoleARNの変更は今後の操作にも影響するため、この作業の便宜で変更しない。【R1】
+5. 操作先が親であること、スキップがRG1件だけであることを作業者・確認者で読み合わせる。
+6. 画面の内容を確認し、ロールバック続行を実行する。
