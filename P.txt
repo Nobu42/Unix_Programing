@@ -1,268 +1,255 @@
-# V2 Exportが参照されなかった理由：現場AIへの引継ぎ
+# Redis更新失敗：CloudTrailの確認手順と調査対象イベント
 
 確認日：2026-11-18
-追記：ローカル3ファイルの読み取り確認、および利用者によるV2論理IDの訂正を反映。
+用途：現場AIチャットへの引継ぎ。AWS公式仕様、確認手順、今回の未確認事項を区別する。
 
-## 0. この資料で依頼したいこと
+現場のAWS環境には接続していません。以下はログの読み取り手順であり、更新・ロールバック続行・設定変更は行っていません。実際のCloudTrailイベントは未取得です。
 
-利用者から共有されたExport対応と、6-1の参照式を照合し、旧グループが指定された経路を確認してください。公式仕様と条件付きの分析を分け、未確認事項は未確認のまま扱ってください。
+## 1. 最初に確認するイベント
 
-本件では現場のAWS環境へ接続していません。調査と資料作成のみで、テンプレート変更・S3アップロード・AWS更新・ロールバック続行は実施していません。
-現在の共有状態はUPDATE_ROLLBACK_FAILEDです。以下のコード例は参照構造の説明用で、現状で直ちに更新実行するための手順ではありません。
-
-## 1. 結論
-
-**確認したローカル6-1は、正しい綴りのImportValue名を!Joinで組み立てています。親6から既存Redis子へ渡すEcrNameはEcr001のままです。EnvName=Test、AppName=Fclであれば、旧Exportを参照する構造です。**
+既存のElastiCache ReplicationGroupに対する変更要求は、まず次を探します。【R1・R2・R4】
 
 ```text
-Test + Fcl + Ecr001 + AwsElastiCacheParameterGroup
-= TestFclEcr001AwsElastiCacheParameterGroup
-→ testf-awsel-8s50v98vj1ty
-→ redis6.x
+eventSource = elasticache.amazonaws.com
+eventName   = ModifyReplicationGroup
+
+確認するJSONパス（そのイベントに記録されている場合）
+requestParameters.replicationGroupId
+requestParameters.engineVersion
+requestParameters.cacheParameterGroupName
 ```
 
-V2のExport名にはEcr001の後ろに-v7があります。参照式がその-v7を含まなければ、V2名には一致しません。
-Fn::ImportValueは、指定したExportの値を取得する関数です。V2という名前、新しさ、Familyの互換性を基準に参照先を自動選択する仕組みではありません。【R1・R2・R3】
+公式APIの入力項目はEngineVersion、CacheParameterGroupNameです。両方とも任意指定です。CloudTrailでは上記のlowerCamelCaseのキーを確認対象とし、実イベントのJSONで表記と値を確認します。【R2】
 
-当初の貼付断片にあった関数の省略・綴り違いについては、ローカル6-1では正しいFn::ImportValue＋!JoinとAwsElastiCacheParameterGroupを確認しました。これらの転記差を今回の障害原因とは扱いません。
+両項目が必ず同じイベントに記録されるとは限りません。片方だけを指定する要求や、複数回の変更要求もあるため、対象RGの該当時間帯のイベントをまとめて確認します。
 
-利用者からV2の子スタック論理IDはEcr001ElastiCacheRedisParameterGroupStackV2と訂正されました。V2を別リソースとして追加することと、既存RedisのCacheParameterGroupNameをそのExportへ向けることは別です。
+更新時とロールバック時に同じModifyReplicationGroupが呼ばれる可能性があります。イベント名だけでは区別せず、対象RG、時刻、要求値、エラーをCloudFormationのイベントと照合します。これは公式API仕様を今回の調査に当てはめた確認方法であり、今回の実呼び出しは未確認です。
 
-ただし、ローカルファイルの確認は、更新時に実際に読み込まれたS3オブジェクト版・実入力・API送信値を直接確認したものではありません。
+## 2. Webコンソールでの具体的な確認手順
 
-## 2. 利用者から共有された対応関係
+AWS公式のEvent historyの操作を、今回の対象に当てはめた手順です。【R3】
 
-| 種類 | Export名 | Export値＝グループ名 | Family |
-| --- | --- | --- | --- |
-| 既存 | TestFclEcr001AwsElastiCacheParameterGroup | testf-awsel-8s50v98vj1ty | redis6.x |
-| V2 | TestFclEcr001-v7AwsElastiCacheParameterGroup | testfc-cache-rw8ceksexno | redis7 |
+1. 作業対象のAWSアカウントでCloudTrailを開く。
+2. リージョンを東京（ap-northeast-1）にする。
+3. 左メニューの「イベント履歴／Event history」を開く。
+4. 検索属性を「イベント名／Event name」にし、値をModifyReplicationGroupにする。既定の「読み取り専用／Read-only=false」が残っている場合は、検索属性を切り替えるか、そのフィルターを外す。
+5. 時間範囲を、CloudFormationの更新開始からロールバック失敗までを含む範囲にする。最初は少し広く取り、該当イベントが見つかってから絞る。
+6. 絶対期間を指定する場合は、JSTなどのローカル時間かUTCかを確認して入力する。
+7. 一覧のModifyReplicationGroupをクリックする。
+8. 詳細画面を下へスクロールし、「イベントレコード／Event record」に表示されるJSONを確認する。
+9. requestParameters内のreplicationGroupIdを読み、対象のRedisであることを確認する。スタック名・論理IDではなく、ReplicationGroupの実際の識別子と照合する。
+10. engineVersionとcacheParameterGroupNameを探して値を控える。requestParameters内の値であることを確認する。
+11. eventTime、requestID、eventID、errorCode、errorMessageも控える。
+12. 同じ時間帯の他のModifyReplicationGroupも開き、更新時・ロールバック時・手動操作時を分けて整理する。
 
-既存RedisのEcrNameはEcr001と共有されています。
-EnvName=Test、AppName=Fclは上記Export名・以前のローカル版に基づく計算の前提です。今回の実際の入力値と一致するか確認してください。
+イベント履歴で使えるのは「属性フィルター1つ＋時間範囲」です。イベント名とイベントソースを同時に属性条件として指定することはできません。【R3】
 
-## 3. 今回のファイル確認で分かったこと
+別の探し方として、検索属性を「イベントソース／Event source」、値をelasticache.amazonaws.comに変更できます。その場合、イベント名は一覧やJSONで確認します。
 
-確認したローカルファイル：
+requestParameters.engineVersionやcacheParameterGroupNameは、イベント履歴の検索属性ではありません。イベント名・時間で絞ってJSONを読むか、「イベントのダウンロード／Download events」からJSONを保存して確認します。CSVの一覧だけで要求パラメータを確認したつもりにならないようにします。【R3】
 
-- /Users/nobu/Elascticach/CloudFormation/6_TestFclElastiCacheStack.yml
-- /Users/nobu/Elascticach/CloudFormation/6-1_ElastiCacheRedisStack.yml
-- /Users/nobu/Elascticach/CloudFormation/6-2_ElastiCacheRedisParameterGroupStack.yml
+## 3. JSONで控える項目と意味
 
-### 親6から渡す値
+| JSONの項目 | 確認内容 |
+| --- | --- |
+| eventSource | elasticache.amazonaws.comか |
+| eventName | ModifyReplicationGroupなど、要求されたAPI名 |
+| awsRegion | ap-northeast-1か |
+| eventTime | 要求処理のUTC日時。Redisの更新完了日時とは別 |
+| requestParameters.replicationGroupId | 対象Redisの実ID |
+| requestParameters.engineVersion | その要求で送信されたバージョン。現在の実バージョンや変更前の値ではない |
+| requestParameters.cacheParameterGroupName | その要求で送信されたPG名。Export名ではなく、解決後のグループ名を確認する |
+| errorCode / errorMessage | サービスが返したエラー。存在する場合に確認する |
+| requestID | 呼び出し先サービスが生成した要求ID |
+| eventID | CloudTrailのイベントID。requestIDとは別 |
+| userIdentity / userAgent | 呼び出し主体を調べる補助情報 |
 
-- 既存PG子への入力：EcrName=Ecr001、CacheParameterGroupFamily=redis6.x（45〜46行）。
-- V2 PG子への入力：EcrName=Ecr001-v7、CacheParameterGroupFamily=redis7（58〜59行）。
-- 既存Redis子への入力：EcrName=Ecr001、EngineVersion=7.1（71〜72行）。
-- AppNameのDefaultはFcl、EnvNameのDefaultはTest（14行・32行）。ただしDefaultは実際に指定された値の証明ではありません。
+JSONのeventTimeはUTCです。JSTへ換算する場合は9時間を加え、日付をまたぐ場合にも注意します。
 
-利用者の最新訂正によるV2側の論理IDは、Ecr001ElastiCacheRedisParameterGroupStackV2です。
-ローカル親6の49行は旧側と同名の表記になっており、48行のコメント・字下げにも差がありますが、実作業版は上記V2論理IDであるとの訂正を優先します。ローカル転記上の差を、今回報告された実行エラーの原因とは扱いません。
-元テンプレートは書き換えていません。
+フィールドの意味はAWS公式のCloudTrailレコード仕様に基づきます。各サービス入力の意味はElastiCacheのAPI仕様で確認します。【R2・R4】
 
-### 子6-1の実際の参照式
+JSONの形を示す説明用の例です。実際の取得ログではなく、両項目が必ず揃うという意味でもありません。
 
-6-1の149〜156行で次を確認しました。
-
-```yaml
-CacheParameterGroupName:
-  Fn::ImportValue:
-    !Join
-      - ""
-      - - !Ref EnvName
-        - !Ref AppName
-        - !Ref EcrName
-        - 'AwsElastiCacheParameterGroup'
+```json
+{
+  "eventSource": "elasticache.amazonaws.com",
+  "eventName": "ModifyReplicationGroup",
+  "awsRegion": "ap-northeast-1",
+  "requestParameters": {
+    "replicationGroupId": "<対象RGの実ID>",
+    "engineVersion": "<実際に送信された値>",
+    "cacheParameterGroupName": "<実際に送信されたPG名>"
+  }
+}
 ```
 
-Fn::ImportValueの下に!Joinがあり、末尾の綴りもAwsElastiCacheParameterGroupです。
-空文字の区切りで、EnvName、AppName、EcrName、固定末尾を連結します。【R1・R3】
-既存Redis子へ渡すEcrNameはEcr001なので、この式には-v7が入りません。
+公式のElastiCache CloudTrailガイドには、API要求・応答のJSON例があります。ただし、その掲載例はModifyReplicationGroupで今回の2項目を同時に示した実例ではありません。今回のキーの有無と送信値は実ログで確認します。【R1】
 
-### 子6-2のExport式
+## 4. 今回の事象との照合方法
 
-6-2の73〜80行では、!Refで取得したPG名を、次の名前でExportしています。
+利用者から共有された対応関係：
+
+| PG名 | 共有されたFamily・位置付け |
+| --- | --- |
+| testf-awsel-8s50v98vj1ty | 旧カスタムPG、redis6.x |
+| testfc-cache-rw8ceksexno | V2カスタムPG、redis7 |
+| default.redis7.cluster.on | 手動アップグレード後に実環境で使用中と共有されたPG |
+
+これらの現在の状態を、今回の調査で実環境へ接続して確認したものではありません。
+
+### 更新時のPG互換性エラー
+
+- CloudFormationでPG互換性エラーが出た時刻前後のModifyReplicationGroupを探す。
+- 対象RGの要求にcacheParameterGroupName=testf-awsel-8s50v98vj1tyが記録されていれば、旧PG名を要求した証拠になる。
+- engineVersionも同時に存在する場合は、そのままの値を控える。テンプレートの7.1と、サービスが返す7.1.0の表記を勝手に統一しない。
+- 対象RG、errorMessage、時刻、可能ならElastiCacheのRequest IDを照合する。
+
+### ロールバック時のダウングレードエラー
+
+- CloudFormationがロールバックへ移った時刻以降の同じRGのイベントを探す。
+- engineVersion=6.2.6が記録されていれば、その要求で旧バージョンを指定した証拠になる。
+- エラー内容が、共有された「Cannot modify redis from 7.1.0 to redis version 6.2.6」と対応するか確認する。
+- cacheParameterGroupNameが記録されている場合は、それも控える。更新時と同じPG名が必ず送られるとは断定しない。
+
+ElastiCache公式は、ModifyReplicationGroupによるエンジンのダウングレードを認めていません。【R2】
+ただし、今回実際にどの要求が送られたかは、この資料だけでは確定していません。
+
+### CloudFormation起因かの照合
+
+- 子スタックのAwsElastiCacheReplicationGroupのイベント時刻・エラーと照合する。
+- userIdentity.arn、userIdentity.sessionContext.sessionIssuer、userIdentity.invokedBy、userAgentを、記録されている範囲で確認する。【R6】
+- CloudFormationは、サービスロール指定時はそのロール、未指定時は利用者認証情報から生成する一時セッションを使う。そのため、呼び出し主体が常に同じ形式になるとは限らない。【R7】
+- invokedByやuserAgentにcloudformation.amazonaws.comがあるかは参考になるが、必須条件として検索・判定しない。
+- CloudTrailのrequestIDを照合するときは、ElastiCache呼び出しのRequest IDと比較する。親のExecuteChangeSetなど別APIのrequestIDと同じだとは仮定しない。【R4】
+
+CloudFormation側のExecuteChangeSet／UpdateStackなどは、開始操作の確認用です。実際にElastiCacheへ渡したPG名・エンジン値の確認は、ElastiCache側の要求イベントを中心に行います。
+CloudFormation公式のログ説明には、スタックの入力パラメータはキー名のみを記録し、値は記録しない旨のNoteがあります。【R5】
+
+## 5. 調査対象イベント名の整理
+
+| イベント名 | 主な用途 | engineVersion／cacheParameterGroupNameの確認 |
+| --- | --- | --- |
+| ModifyReplicationGroup | 既存RGの変更要求。本件で最初に探す | APIに両入力あり。送信・記録されていれば確認できる。【R2】 |
+| ModifyCacheCluster | クラスター単位の変更要求 | APIに両入力あり。ただし今回CloudFormationがこのAPIを使ったとは未確認。【R8】 |
+| CreateReplicationGroup | 新規作成・置換で、このAPIが呼ばれた場合 | APIに両入力あり。既存RGの更新イベントと混同しない。【R9】 |
+| CreateCacheParameterGroup | V2などのPG作成 | cacheParameterGroupNameとcacheParameterGroupFamilyを確認する。EngineVersionの入力はない。【R10】 |
+| ModifyCacheParameterGroup | PG内の設定値の変更 | PG名と変更パラメータを確認する。RGへのPG関連付け変更やEngineVersion変更のイベントではない。【R11】 |
+| ExecuteChangeSet / UpdateStack | CloudFormation側の実行契機の確認 | eventSourceはcloudformation.amazonaws.com。ElastiCacheへの解決済み要求値と同一視しない。【R5】 |
+
+CacheParameterGroupFamilyはModifyReplicationGroupの入力項目ではありません。
+PG名がどのFamilyに属するかは、PGの設定、作成時のCreateCacheParameterGroup、保存済みの確認結果などと別途照合します。
+
+## 6. 見つからない・値がない場合
+
+- イベント履歴はリージョン単位・過去90日間の管理イベント。証跡を新規作成しなくても直近の履歴は確認できる。【R1・R3】
+- 対象アカウント、東京リージョン、JST／UTC、時間範囲、フィルターを再確認する。
+- 90日より前は、当時から保存されていた証跡のS3ログやCloudTrail Lakeなどの保存先を確認する。保存状況は現場で確認する。
+- requestParametersは要求で送られた項目であり、毎回全設定を含むものではない。APIの任意項目が両方揃うことを前提にしない。【R2・R4】
+- requestParametersにはサイズ超過による省略の仕様もある。項目がない場合、理由を未送信と断定せず、前後の要求も確認する。【R4】
+- エラーは通常errorCode／errorMessageを確認するが、サービスによってresponseElementsに入る場合もある。【R4】
+- エラー欄がないことだけでは、非同期のリソース更新やCloudFormation全体の成功を証明できない。【R2】
+- ElastiCache公式ではDescribe*のCloudTrail responseElementsはnullと説明されている。DescribeReplicationGroupsのCloudTrailイベントから、実環境の現在値を取得できるとは考えない。【R1】
+- ログが見つからないことだけで「CloudFormationはAPIを呼んでいない」と確定しない。記録の範囲と実適用版を確認する。
+
+## 7. 現場AIへ渡す確認結果の書式
+
+該当する要求が複数ある場合は、1イベントごとに記録します。値がない場合は「項目なし」、判断できない場合は「未確定」と記載します。
 
 ```text
-EnvName + AppName + EcrName + AwsElastiCacheParameterGroup
+区分：更新時／ロールバック時／手動操作時／未確定
+対象AWSアカウント：
+awsRegion：
+eventTime（UTC）：
+eventTime（JST換算）：
+eventSource：
+eventName：
+requestParameters.replicationGroupId：
+requestParameters.engineVersion：
+requestParameters.cacheParameterGroupName：
+errorCode：
+errorMessage：
+requestID：
+eventID：
+呼び出し主体（userIdentity等）：
+対応するCloudFormationイベントの時刻・論理ID・エラー：
+ログから確定できたこと：
+まだ未確認のこと：
 ```
 
-したがって、同じ6-2を使っても、旧側へEcr001を渡す場合と、V2側へEcr001-v7を渡す場合ではExport名が異なります。
-V2という子スタック論理IDや、その子に渡すEcrNameは、別の既存Redis子に渡すEcrNameを自動変更しません。
+## 8. AWS公式根拠：URLとページ内の確認場所
 
-### この確認の範囲
-
-- ローカル3ファイルを直接読み取りました。
-- V2論理IDは利用者の訂正で確認しました。
-- S3上の6-1／6-2が今回のローカル版と同じ内容か、変更セット作成時の入力値が何かは、AWS環境で確認していません。
-- CloudTrailで実際の要求PG名を確認するまでは、「ソース上の参照経路」と「実際のAPI送信内容」は区別してください。
-- ローカル親6には、隣接6-1でDefaultのないAppNameLowerCase、EnvNameLowerCase、LogGroupName、DeliveryStreamNameを渡す記載もありません。実適用版との照合事項であり、今回のエラー原因とは断定しません。
-
-## 4. なぜV2の追加だけでは切り替わらないのか
-
-新規PGの作成と、既存ReplicationGroupへの関連付けは別です。
-
-- V2をAddする：新しいParameterGroupや、そのOutputs／Exportを作成する。
-- 既存RedisでV2を使う：既存RGのCacheParameterGroupNameが、V2の物理グループ名へ解決されるようにする。
-
-旧名をImportValueで参照したままなら、V2という別名のExportを追加しても、その参照式の値は変わりません。
-変更セットにAddがあることは、新しいリソースの追加予定を示しますが、既存RGがそれを使うという証明にはなりません。【R1・R4】
-
-したがって、実適用版も今回確認した参照構造・入力値であれば、旧グループが選ばれたことはImportValueの仕様に沿う挙動です。この説明のために、CloudFormationがRedis7用グループの自動選択に失敗したという仮説を置く必要はありません。
-
-## 5. 変更セットで事前に判別する方法はあったか
-
-**変更セットの一覧だけで解決後の物理名・Familyまで必ず見えるとは言えません。ただし、子6-1の参照式・入力値・Export対応を照合すれば、旧参照が残る構造は事前確認できます。**
-
-確認方法：
-
-1. 親からネストされた子6-1の変更セットを開く。【R5】
-2. 対象AwsElastiCacheReplicationGroupのProperty-level changes／View detailsを開き、Before／Afterのテンプレート設定を見る。【R6】
-3. CacheParameterGroupNameがV2へ変更されるかを確認する。差分欄に出ていなくても、提出版6-1に残る参照式を確認する。
-4. 実際のEnvName、AppName、EcrNameを記録し、ImportValueの名前を組み立てる。
-5. CloudFormationのExportsで、その名前のExport値を確認する。今回の対応表と照合する。【R10】
-6. V2子のOutputsに新しいExportがあることと、既存RGの参照先がそこを向くことを、別々に確認する。
-7. APIを使って詳細確認する場合はDescribeChangeSetのIncludePropertyValues、ResourceChangeのBeforeContext／AfterContextを利用できる。ただし、表示が省略・未解決の場合もあり、解決後のPG名・Familyが必ず出るとは保証しない。【R8・R9】
-
-AWS公式は、ネストされたスタックのプロパティ単位変更セットではクロススタック参照を解決しない、と説明しています。【R7】
-Dynamic評価では、組み込み関数の結果に依存する値を実行前に確定できない場合もあります。【R9】
-
-そのため「EngineVersionしか差分にない＝PG参照は問題ない」と判断せず、提出版・入力・Exportの照合を組み合わせる必要があります。
-ただし、今回の変更セット画面に具体的に何が表示されていたかは未確認です。事前に必ず明確な警告が表示されていた、と断定しないでください。
-
-## 6. 実行時の経路を確定する証拠
-
-CloudTrailの更新時のModifyReplicationGroupで、requestParameters.cacheParameterGroupNameを確認します。【R11】
-
-```text
-cacheParameterGroupName = testf-awsel-8s50v98vj1ty
-```
-
-この値が該当する更新時のイベントで確認できれば、旧PG名が実際に要求された証拠になります。
-eventTime、対象RG、requestID、engineVersion、errorMessageを合わせ、更新時とロールバック時を区別してください。
-該当値が取得できない、または別名だった場合は、推測で補わず、適用したS3オブジェクト版や親入力も含め再確認します。
-
-今回のエラーについて「エンジン変更時には必ず未変更のPG名も再送される」とまでは断定していません。テンプレート上の名前解決と、実際のAPI送信内容を分けて確認します。
-
-## 7. 修正を検討する場合の注意
-
-EcrName全体をEcr001-v7へ変更する案は、そのまま採用しないでください。
-今回確認したローカル6-1では、EcrNameがReplicationGroupId（122〜126行）、ReplicationGroupDescription、Nameタグ、PGをImportする名前（149〜156行）に共用されています。
-ReplicationGroupIdの変更は公式上Replacementであり、PG参照だけを切り替えるつもりで、本体の置換を誘発するおそれがあります。【R4】
-
-参照先だけを変える考え方の説明例：
-
-```yaml
-CacheParameterGroupName:
-  Fn::ImportValue:
-    Fn::Sub: '${EnvName}${AppName}${EcrName}-v7AwsElastiCacheParameterGroup'
-```
-
-この例ではEcrNameをEcr001のまま維持し、PG参照式にだけ-v7を含めています。
-これは完成した実行用テンプレートではありません。実際の入力値・V2の存在・Family・適用可否を照合する必要があります。
-
-他環境と子テンプレートを共用している場合、共通ファイルの上書きで他環境の次回更新にも影響する可能性があります。対象用の別版配布や、PG参照用の専用パラメータを分ける案を現場で検討してください。
-現在はUPDATE_ROLLBACK_FAILEDなので、通常更新による修正は、まず復旧方針と現在状態を確認した後に検討します。【R12】
-
-## 8. AWS公式資料：URLと確認場所
-
-### R1：Fn::ImportValueは指定したExportの値を取得する
-
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-importvalue.html
-- 確認箇所：冒頭、Parameters → sharedValueToImport、Example、Supported functions。
-- ページ内検索：`sharedValueToImport`、`Fn::Sub`。
-- 確認できること：別スタックがExportした値の取得。Sub／Join／Refを組み合わせる例・対応関数。SubとImportValueの短縮記法を直接重ねる形式の制限もNoteに記載。
-
-### R2：${...}を置換するFn::Sub
-
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-sub.html
-- 確認箇所：Declaration、Parameters → String。
-- ページ内検索：`String`。
-- 確認できること：Fn::Subで入力文字列中の変数を指定値へ置換する。
-
-### R3：Fn::Joinによる連結
-
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-join.html
-- 確認箇所：冒頭、Parameters → delimiter、Return value。
-- ページ内検索：`delimiter`。
-- 確認できること：値を指定区切り文字で連結する。空の区切りなら文字を挟まず連結する。
-
-### R4：PG名の関連付けと、RG識別子変更の置換
-
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-replicationgroup.html
-- 確認箇所①：Properties → CacheParameterGroupName。
-- ページ内検索①：`CacheParameterGroupName`。
-- 確認できること①：RGに関連付けるグループ名を指定するプロパティ。
-- 確認箇所②：Properties → ReplicationGroupId → Update requires。
-- ページ内検索②：`ReplicationGroupId`。
-- 確認できること②：ReplicationGroupId変更はReplacement。
-
-### R5：親から子の変更セットまで確認する
-
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/change-sets-for-nested-stacks.html
-- 確認箇所：Working with change sets for nested stacks (console) → View the change set。
-- ページ内検索：`View the change set`。
-- 確認できること：親からネストされた子の変更セットへ進み、子のリソース変更を確認できる。
-
-### R6：プロパティ単位の変更前後を見る
-
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-view.html
-- 確認箇所：コンソールの変更セット確認手順、Property-level changes列のView details。
-- ページ内検索：`Property-level changes`、`View details`。
-- 確認できること：変更前後のテンプレート設定、Before／After値を確認する方法。
-
-### R7：ネスト変更セットの参照解決の制限
-
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets-create.html
-- 確認箇所：コンソール作成手順のSubmit直後のNote。
-- ページ内検索：`cross-stack references`。
-- 確認できること：ネストされたスタックのプロパティ単位変更セットでは、クロススタック参照を解決しない。
-
-### R8：DescribeChangeSetで詳細値を取得する指定
-
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_DescribeChangeSet.html
-- 確認箇所：Request Parameters → IncludePropertyValues。
-- ページ内検索：`IncludePropertyValues`。
-- 確認できること：trueでプロパティ値の詳細を含む変更内容を返す。
-
-### R9：Before／Afterのコンテキストと、Dynamic評価
-
-- URL①：https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChange.html
-- 確認箇所①：Contents → BeforeContext／AfterContext。
-- ページ内検索①：`BeforeContext`、`AfterContext`。
-- 確認できること①：変更前後のリソースのコンテキストを持つJSON文字列。
-- URL②：https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChangeDetail.html
-- 確認箇所②：Contents → Evaluation。
-- ページ内検索②：`Dynamic`。
-- 確認できること②：組み込み関数の結果に依存して、変更セット作成時には対象値を確定できない評価がある。
-
-### R10：Export名・値・Import先の確認
-
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-exports.html
-- 確認箇所：Listing exported output values、Listing stacks that import an exported output value。
-- ページ内検索：`Export Name`。
-- 確認できること：CloudFormationのExportsで名前と値を確認し、名前を開くとImportしているスタックを確認できる。
-
-### R11：実際のAPI送信内容をCloudTrailで確認する
+### R1：ElastiCache APIのCloudTrail記録
 
 - URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/logging-using-cloudtrail.html
-- 確認箇所：Amazon ElastiCache information in CloudTrail、Understanding Amazon ElastiCache log file entries。
-- ページ内検索：`requestParameters`。
-- 確認できること：API呼び出しと要求内容を確認できる。今回の実送信値はまだ取得していない。
+- 確認箇所：冒頭、Amazon ElastiCache information in CloudTrail、Understanding Amazon ElastiCache log file entries。
+- ページ内検索：`eventSource`、`requestParameters`、`Describe*`。
+- 根拠：ElastiCache APIの記録、証跡未設定時のイベント履歴、JSON例、Describe系応答の扱い。
 
-### R12：UPDATE_ROLLBACK_FAILEDでの通常更新の制約
+### R2：ModifyReplicationGroupの要求パラメータ
 
-- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-continueupdaterollback.html
-- 確認箇所：ページ冒頭の状態説明。
-- ページ内検索：`can't be updated`。
-- 確認できること：UPDATE_ROLLBACK_FAILEDでは通常更新できず、まずロールバックの復旧が必要。
+- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyReplicationGroup.html
+- 確認箇所：Request Parameters → ReplicationGroupId、EngineVersion、CacheParameterGroupName、ApplyImmediately。
+- 根拠：対象IDと変更要求値、2項目の任意指定、ダウングレード不可、非同期適用。
 
-## 9. 現場AIに返してほしい確認結果
+### R3：イベント履歴の画面操作・検索・90日制限
 
-1. 今回確認したローカル6-1のImportValue＋Join式が、変更セット作成時のS3版と一致するか。
-2. 既存RGへ渡したEnvName、AppName、EcrNameと、解決されるExport名。
-3. そのExport値が旧PG名か、V2のPG名か。
-4. 変更セットと提出版6-1のどこで、その参照を確認できたか。
-5. CloudTrailの更新時のPG名が、上記の参照解決と一致するか。
-6. EcrNameを変えず、PG参照だけを切り替える場合の修正箇所と、他環境への影響範囲。
+- URL：https://docs.aws.amazon.com/awscloudtrail/latest/userguide/view-cloudtrail-events-console.html
+- 確認箇所：冒頭、To view Event history、Filtering CloudTrail events、Viewing details for an event、Downloading events、Customizing the display。
+- ページ内検索：`single attribute`、`Event record`、`90 days`、`Event time display`。
+- 根拠：1属性＋時間範囲、詳細JSON、ダウンロード、リージョン単位の90日履歴、表示時刻の切替。
 
-ローカルソース上は旧Exportを参照する構造と確認できました。実適用版・入力値・API送信内容は未取得です。これらを区別したうえで回答してください。
+### R4：CloudTrail JSONフィールドの意味・省略制限
+
+- URL：https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-record-contents.html
+- 確認箇所：eventTime、eventName、requestParameters、errorCode、errorMessage、requestID、eventID。
+- ページ内検索：上記のフィールド名。
+- 根拠：UTC時刻、APIアクション名、実際の要求パラメータ、エラー、各ID。requestParametersのサイズ上限と省略規則。
+
+### R5：CloudFormation側のCloudTrail記録
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-api-logging-cloudtrail.html
+- 確認箇所：Understanding CloudFormation log file entries直下のNote、UpdateStackの例。
+- ページ内検索：`Parameter values`、`UpdateStack`。
+- 根拠：CloudFormation APIの記録と、スタック入力パラメータ値は記録しないという説明。
+
+### R6：呼び出し主体の確認
+
+- URL：https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-user-identity.html
+- 確認箇所：Fields → type、arn、invokedBy、sessionContext → sessionIssuer。
+- 根拠：IAM主体、サービスからの呼び出し、一時認証情報の発行元の確認。
+
+### R7：CloudFormationが使う認証情報
+
+- URL：https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-iam-servicerole.html
+- 確認箇所：冒頭のサービスロールと既定動作の説明。
+- 根拠：サービスロール指定時と未指定時で、操作に使う認証情報の形が異なる。
+
+### R8：ModifyCacheClusterの入力
+
+- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyCacheCluster.html
+- 確認箇所：Request Parameters → CacheClusterId、EngineVersion、CacheParameterGroupName。
+- 根拠：クラスター変更APIにも両項目がある。本件での使用有無は実ログ次第。
+
+### R9：CreateReplicationGroupの入力
+
+- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CreateReplicationGroup.html
+- 確認箇所：Request Parameters → EngineVersion、CacheParameterGroupName。
+- 根拠：作成APIにも両入力がある。
+
+### R10：PG作成時のFamily確認
+
+- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CreateCacheParameterGroup.html
+- 確認箇所：Request Parameters → CacheParameterGroupFamily、CacheParameterGroupName。
+- 根拠：PGの作成名とFamily。Redis本体のエンジン更新要求とは別。
+
+### R11：PG内の設定変更
+
+- URL：https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ModifyCacheParameterGroup.html
+- 確認箇所：Request Parameters → CacheParameterGroupName、ParameterNameValues。
+- 根拠：PG内のパラメータ値を変更するAPI。
+
+## 9. 現場AIへの依頼
+
+実イベントから、更新時・ロールバック時の対象RG、送信されたengineVersion／cacheParameterGroupName、エラーを抽出してください。
+キーがなければ補完せず、未記録として扱ってください。手動アップグレード時のイベントと混同せず、CloudFormationの時系列と対応させてください。
+ログで確認した事実と、テンプレート構造からの推論を分けて回答してください。
