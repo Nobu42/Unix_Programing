@@ -1,128 +1,148 @@
-# Redis／CloudFormation ロールバック失敗の復旧手順書（下書き）
+Redis 7.1障害時：6.2へのバックアップ復元とパラメータグループ対応
+確認日：2026-11-19
+対象：ノードベースのElastiCache for Redis OSS。実環境の操作・復元検証は未実施。
 
-作成日：2026-11-18
-対象：先に障害が発生したTestFclElastiCacheStack
-作業方法：AWS Webコンソール。作業者・確認者で対象と実行内容を照合する。
+【1. 結論】
+・既存Redis 7.1のEngineVersionを6.2へ書き換えて、そのまま戻すことはできない。
+・今回の切り戻し案は、アップグレード前のRedis 6.2で取得したバックアップから、新しい6.2のReplicationGroupを作り、確認後に接続先を切り替える方法。
+・復元先には6.2と互換性のあるPGを指定する。Familyはredis6.x。redis7のPGは使用しない。
+・旧6系カスタムPGが削除済みでも、設定を確認して6系PGを再作成できる。独自設定が不要なら、クラスターモードに合う6系デフォルトPGも選択肢になる。
+根拠：R1・R2・R3・R4。
 
-この資料の「元に戻す」は、Redis 7.1.0を維持し、CloudFormationをUPDATE_ROLLBACK_FAILEDからUPDATE_ROLLBACK_COMPLETEへ戻す意味です。Redisを6.2.6へ戻す手順ではありません。
-本番環境の7系PG追加作業は、別の作業として扱います。
+【2. 使用するバックアップの条件】
+・アップグレード前、6.2で取得したバックアップを選ぶ。
+・取得日時、元のエンジンバージョン、対象RG、全シャードが含まれるか、状態available、暗号化・KMSの利用条件を確認する。
+・SnapshotのEngineVersionは取得元エンジン、CacheParameterGroupNameは取得元に関連付いていたPG名を示す。
+・バックアップに元PG名があっても、削除済みカスタムPGの自動再作成を前提にしない。復元前にPGの存在と設定を確認し、復元先へ明示指定する。
+・7.1に上げた後のバックアップから6.2へ戻せる、という前提にはしない。今回確認した公式資料では、この7.1→6.2の復元互換性を保証する記載は確認できていない。本案では更新前の6.2バックアップを使う。
+・6.2のバックアップがない、取得に失敗している、暗号鍵を利用できない場合は、この案を実行可能とは判断しない。
+根拠：R1・R2・R5。7.1バックアップの6.2復元可否が必要な場合は、個別にAWSサポートへ確認する。
 
-現場の実環境では未検証です。AWS環境への接続、更新、スキップ、ロールバック続行は実施していません。
-手順Aは現在状態の確認を実行条件とする復旧案です。手順Bのテンプレート整合化は、実適用版が揃ってから実行版を確定します。
+【3. パラメータグループをどうするか】
 
-## 1. 到達点と作業の分け方
+旧6系カスタムPGが残っている場合：
+・Family＝redis6.x、独自設定、クラスターモードを確認し、復元先へ指定する。
 
-| 区分 | 到達点 | この資料での扱い |
-| --- | --- | --- |
-| 手順A：障害状態の復旧 | 親がUPDATE_ROLLBACK_COMPLETE、Redisは7.1.0／default.redis7.cluster.onを維持 | 条件付きの具体的なコンソール手順 |
-| 手順B：管理定義の整合化 | Redis本体の定義を7.1と現在の適用PGへ合わせ、親更新を完了 | 修正方針・確認手順。実行用ファイルは未確定 |
-| 旧構造の整理 | カスタム7系PGへの切替、元のImport構造への復帰、旧PG／Exportの整理 | 必要性と影響を確認して別作業とする |
+旧6系カスタムPGが削除済みの場合：
+・保存済みテンプレート、Git/SVN、更新前の設定記録から独自設定を確認する。
+・Family＝redis6.xで、復元用のカスタムPGを新規作成して設定を再現する。
+・元の物理名やExport値をその場で再利用・変更するのではなく、CloudFormationの管理関係を確認して扱いを決める。
 
-スキップ後は、リソース行がUPDATE_COMPLETEになっても管理定義の不整合は残ります。無関係な通常更新を始める前に、手順Bで整合させる必要があります。【R1・R2】
+以前の共有どおり、独自設定がcluster-enabled=yesだけの場合：
+・ほかの設定も含めて必要な実効値が一致するなら、default.redis6.x.cluster.onが候補になる。
+・クラスターモード無効ならdefault.redis6.xが候補。
+・1シャードだからクラスターモード無効、とは判断しない。モードとシャード数は分けて確認する。
+・デフォルトPGは変更できない。独自設定が必要ならカスタムPGを作る。
+根拠：R3・R4・R6。
 
-## 2. 共有済み情報
+【4. Webコンソールでの復元手順案】
+以下は公式の復元操作を今回に当てはめた運用案。実際の構成・業務判断は現場で確定する。
 
-| 項目 | 共有された値 |
-| --- | --- |
-| ルートスタック | TestFclElastiCacheStack |
-| 既存Redis子スタックの実名 | TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z76RB |
-| 子内の失敗リソース論理ID | AwsElastiCacheReplicationGroup |
-| リソース型 | AWS::ElastiCache::ReplicationGroup |
-| 親の状態 | UPDATE_ROLLBACK_FAILED |
-| ロールバック時のエラー | Cannot modify redis from 7.1.0 to redis version 6.2.6 |
-| Redisの実バージョン | 7.1.0 |
-| 実機の適用PG | default.redis7.cluster.on |
-| 管理定義のエンジン | 6.2.6 |
-| 既存6-2が管理する旧PGのFamily | redis6.x |
-| リージョン | 東京 ap-northeast-1を前提。現画面で照合する |
+1. 対象アカウント・リージョンを確認する。
+2. 使用する6.2時点のバックアップと、復元用6系PGを確定する。
+3. ElastiCacheの「バックアップ／Backups」を開く。
+4. 対象バックアップを選び、「アクション／Actions」→「復元／Restore」を選ぶ。
+5. 復元先としてノードベースのキャッシュを選択し、新しい識別子を指定する。
+6. エンジンをRedis OSS 6.2として、互換性のある6系PGを指定する。選択肢・利用可能バージョンが想定と違う場合は、作成せず確認する。
+7. シャード数・レプリカ数・MultiAZ・ノードタイプ・AZ配置を確認する。まず切り戻し対象の構成に合わせ、構成変更は別途検証する。
+8. サブネットグループ・SG・暗号化・KMS・TLS・認証／ユーザーグループ等を確認する。復元だけで必要な接続・認証設定がすべて再現されると決めつけない。
+9. 内容を確認して作成する。既存7.1を先に削除する手順にはしない。
+10. 復元先の全ノードが利用可能となり、実バージョン・PG・データ・アプリ接続が期待どおりか確認する。
+11. 新しいエンドポイントを確認し、現場の切替手順に従ってアプリの接続先や独自DNSを変更する。クラスターモード有効なら構成エンドポイントを確認する。
+12. 切替後の業務確認を行い、旧7.1・バックアップ・旧スタックの整理は別途判断する。
+根拠：復元画面の基本操作はR1、指定項目はR2、エンドポイントはR7。先に別環境へ復元・確認してから切り替える部分は、本件向けの運用案。
 
-この表は利用者からの共有情報です。作業開始時点の状態は、手順A-1〜A-3で再確認します。
-旧6系PGと、実機に適用中のdefault.redis7.cluster.onは別のグループです。旧PG自体のFamilyが7系へ変わったという意味ではありません。
+バージョン表記の注意：
+・公式では6.2を指定すると、その時点の優先パッチ版で起動すると説明されている。6.2.6と完全に同じパッチへ戻る保証はしない。
+・APIの6.xは6系の最新マイナーを選ぶ表記として説明されており、「現状維持」の指定ではない。今回の6.2復元では6.2を明示して確認する。
+根拠：R8。
 
-## 3. 実行前に埋める項目と開始条件
+データの注意：
+・復元できるのはバックアップ取得時点のデータ。取得後に7.1側へ入った更新は、その6.2バックアップには含まれない。
+・セッション・キュー・業務状態を保存している場合は、この差をどう扱うか、書き込み停止や切替タイミングも含め現場で決める。
+根拠：Snapshotは取得時点のコピーというR5の定義。データ差の扱いは本件の業務上の確認事項。
 
-以下が未確認のままなら、手順A-4の実行へは進みません。共有名と実画面が違う場合は、実際の名前で手順書を訂正します。
+【5. 旧6系PGが消えた理由】
+現時点では原因未確認。Redisのアップグレードだけで、旧PGが必ず削除されるとは断定しない。
 
-| 確認項目 | 記録欄・判定 |
-| --- | --- |
-| 現場の対象AWSアカウントID | 未確認。個人学習用アカウントを流用しない |
-| 親スタックARN・現在ステータス | 未確認。対象親がUPDATE_ROLLBACK_FAILEDであること |
-| 既存Redis子スタック名・現在ステータス | 未確認。親のリソースリンクから確認 |
-| 子内RG行の現在ステータス | 未確認。ロールバック失敗によるUPDATE_FAILEDであること |
-| 子内RG行の最新Status reason | 未確認。7.1.0→6.2.6の拒否と一致すること |
-| ReplicationGroupの物理ID | 未確認。子内RG行の物理IDとElastiCacheの対象が一致すること |
-| 実エンジン・PG・稼働状態・保留中変更 | 作業時に確認。共有値から変わっていないこと |
-| 新規V2子スタック名・状態・PG物理名 | 未確認。削除済み・残存・失敗を区別する |
-| V2 PGの利用先・V2 ExportのImport先 | 未確認。ロールバックの後片付けを妨げないか確認 |
-| 他のロールバック失敗 | 未確認。ある場合は原因と対処を別途確定する |
-| 現在のCloudFormation実行ロール | 未確認。今回の復旧のために別ロールへ変更しない |
-| バックアップ・業務確認方法 | 現場の既存手順・作業方針を確認して記録 |
-| 作業者・確認者・作業日時 | 現場で記入 |
+公式仕様から説明できる候補：
+・CloudFormationで既存PGのFamilyをredis6.x→redis7へ変更すると、そのPGは置換対象になる。
+・置換時は、既定で旧物理リソースが削除される。これが実施されていれば、旧6系PGが見当たらない説明になる。
+・別の可能性として、PG子スタックの削除や、手動のDeleteCacheParameterGroupがある。
 
-指定できるのは、ロールバック失敗を理由にUPDATE_FAILEDとなったリソースです。親がUPDATE_ROLLBACK_FAILEDであることや、過去のエラーに論理IDがあることだけでは十分ではありません。【R1・R2】
+確認するもの：
+・子6-2のPGリソースの更新・置換・削除イベントと、更新前後の物理ID。
+・親のPG子スタック削除イベント。
+・CloudTrailのDeleteCacheParameterGroupと、対象PG名・時刻・呼び出し主体。
+・リージョン、検索条件、削除されたと思っているPGの正確な名前。
 
-## 4. 手順A：ロールバック失敗状態を解消する
+今後、Family置換で旧PGを残す設計にする場合は、子6-2内のAWS::ElastiCache::ParameterGroup自体にUpdateReplacePolicy: Retainを設定する案がある。
+親の子スタックに付いたDeletionPolicyだけを、子内PGの置換時の保持設定と同一視しない。Retainした旧物理PGはCFNの管理対象から外れるため、残存管理も必要。
+これは今後の保持設計であり、すでに削除されたPGを復活させる設定ではない。
+デフォルトPGは削除できないため、旧PGがデフォルトだった場合は、まず表示・検索条件を確認する。
+根拠：R3・R9・R10・R11。
 
-### A-1. 対象と現在状態を保存する（読み取り）
+【6. CloudFormation管理の注意】
+・新規復元したRGが、元の論理IDへ自動的に置き換わるわけではない。物理ID・エンドポイント・管理対象を別々に確認する。
+・CFNで復元先を作る場合、AWS::ElastiCache::ReplicationGroupにはSnapshotNameがある。復元用の別スタック／別リソースとして設計し、既存7.1のEngineVersionを6.2へ書き戻す操作と混同しない。
+・既存リソースのSnapshotName変更はReplacement。失敗中の元スタックへ、復元目的で安易に追加しない。
+・元スタックがUPDATE_ROLLBACK_FAILEDなら、その管理状態の復旧と、データを6.2環境へ戻す作業を分ける。ResourcesToSkipはバックアップ復元ではない。
+根拠：R12。元スタックの復旧については、先に作成した条件付き復旧手順書を別途使用する。
 
-1. 現場の対象アカウントでCloudFormationを開き、東京リージョンを選ぶ。
-2. TestFclElastiCacheStackを選択し、スタックARNと現在のステータスを記録する。
-3. 「イベント」で、更新開始、最初の更新失敗、ロールバック開始、ロールバック失敗の時刻・理由を保存する。【R3】
-4. 「リソース」から既存Redis子スタックの物理IDリンクを開く。
-5. 子の「リソース」でAwsElastiCacheReplicationGroupの現在の状態・物理IDを記録する。
-6. 子の「イベント」で最新の失敗理由を確認し、ロールバック中の7.1.0→6.2.6の拒否であることを照合する。
-7. 親・既存Redis子・旧PG子・V2子それぞれのテンプレート、入力値、TemplateURLを保存する。今回の提出版と、更新前の成功版がある場合は区別して保存する。
+【7. 実行用手順を確定するために必要な情報】
+・6.2で取得したバックアップの名前、日時、エンジン、状態、全シャードの収録範囲。
+・復元先のノード・シャード・レプリカ・クラスターモード・接続／認証設定。
+・旧PGの独自設定と、削除・残存の状況。
+・新しいエンドポイントへの切替方法と、バックアップ取得後のデータ差の扱い。
+・復元先をCFNで作るかコンソールで作るか、その後の管理方針。
 
-判定：親の状態またはRGの失敗理由が想定と異なる場合、A-4へ進まず手順を見直す。
+【AWS公式URLと確認箇所】
 
-### A-2. Redis実機を確認する（読み取り）
+R1：バックアップから新しいキャッシュへ復元する操作
+https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/backups-restoring.html
+確認箇所：To restore a backup to a node-based cluster (console)、AWS CLIのSnapshotNameによる復元例。
 
-1. ElastiCacheで、A-1のRG物理IDと一致する対象を開く。
-2. 実エンジンが7.1.0で、適用PGがdefault.redis7.cluster.onであることを記録する。
-3. 全シャード・ノードの状態、PGの適用状態、保留中の変更、エンドポイントを記録する。
-4. 業務・接続確認は、現場で決まっている方法と担当者で実施・記録する。
-5. バックアップの状態と、復旧中に障害が発生した場合の連絡・対応方針を確認する。新規取得の要否は現場の方針に従う。
+R2：新規RG作成時の復元元・エンジン・PG指定
+https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_CreateReplicationGroup.html
+確認箇所：Request Parameters → SnapshotName、EngineVersion、CacheParameterGroupName、CacheSubnetGroupName。
+EngineVersionのImportantに、既存RGのダウングレード不可の説明がある。
 
-判定：実機が更新中・障害中、または共有値と異なる場合、その状態への対応方針を決めてから進む。
-この手順ではRedisのダウングレードを行わない。ElastiCacheは既存RGのエンジンダウングレードを認めていない。【R4】
+R3：Family互換性とデフォルトPGの変更・削除制約
+https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ParameterGroups.Management.html
+確認箇所：冒頭の互換性、デフォルトPGの制約。
 
-### A-3. V2と、残るロールバックの対象を確認する（読み取り）
+R4：Redis6系のデフォルトPG名
+https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ParameterGroups.Engine.html
+確認箇所：Redis OSS 6.x parameter changes。default.redis6.x、default.redis6.x.cluster.onの説明。
 
-1. 親のリソース・イベントから、今回追加されたV2子スタックの実名と現在状態を特定する。直近に相談した本番用V7とは取り違えない。
-2. V2子が残っていれば、PG物理名と、作成・削除・失敗のイベントを記録する。
-3. そのPGが、対象RG以外も含めてキャッシュに使用されていないか確認する。
-4. V2のExportが残っていれば、CloudFormationのExportsでImportしているスタックを確認する。
-5. 旧PG・旧Exportなど、その他の失敗・削除待ちも記録する。
-6. V2がロールバックにより削除され得ることを、作業者・確認者で確認する。
+R5：バックアップに記録された取得元の情報
+https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_Snapshot.html
+確認箇所：冒頭、Contents → EngineVersion、CacheParameterGroupName、SnapshotStatus、NodeSnapshots。
 
-RGのスキップだけで、親のその他のロールバック処理が止まるわけではありません。親からの続行は子にも及びます。【R2】
-利用中のPGは削除できず、Importが残るExportも削除・変更できません。【R5・R6】
+R6：PGの作成と独自設定
+https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ParameterGroups.Creating.html
+確認箇所：コンソール作成手順のFamily、および作成直後はFamilyのデフォルト値になる説明。
 
-判定：V2の使用・参照、別の失敗など、残りの処理に未解決の問題がある場合はA-4へ進まない。PGの手動削除や追加スキップで、その場で解決したことにしない。
+R7：接続先エンドポイント
+https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Endpoints.html
+確認箇所：クラスターモード有効／無効それぞれのエンドポイントの説明。
 
-### A-4. スキップ対象を確定する（操作直前の照合）
+R8：6.2指定時のパッチ版・6.x指定の意味
+https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/engine-versions.html
+確認箇所：ElastiCache version 6.2 for Redis OSS (enhanced)。ページ内検索：preferred patch、6.x。
 
-今回の候補は、既存Redis子のRGリソース1件です。
+R9：CFNでFamily変更は置換
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-parametergroup.html
+確認箇所：Properties → CacheParameterGroupFamily → Update requires: Replacement。
 
-```text
-TestFclElastiCacheStack-Ecr001ElastiCacheRedisStack-4F1IQA6Z76RB.AwsElastiCacheReplicationGroup
-```
+R10：置換時の旧リソースの削除・保持
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-attribute-updatereplacepolicy.html
+確認箇所：冒頭、UpdateReplacePolicy options → Delete、Retain。
 
-- 上の行全体で1つの値。途中に改行・空白を入れない。
-- 前半は子スタックの実名。親テンプレートの子スタック論理IDではない。
-- 後半は子内のRGリソース論理ID。
-- 親スタック全体や、子スタック全体をスキップする指定ではない。
-- 最新のRG行が、ロールバック失敗によるUPDATE_FAILEDであることを、再度確認する。
-- この1件以外を追加する場合は、別の失敗理由とスキップ条件を確認して手順書を改訂する。
+R11：ElastiCache API呼び出しの記録
+https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/logging-using-cloudtrail.html
+確認箇所：Amazon ElastiCache information in CloudTrail。
 
-AWS公式の形式はNestedStackName.ResourceLogicalIDです。【R1】
-子スタックコンテナ自体をスキップする場合のDELETE系状態条件は、今回のRG1件の指定とは別です。
-
-### A-5. 親からロールバックを続行する（ここからAWS変更操作）
-
-1. CloudFormationで親TestFclElastiCacheStackを開く。既存Redis子を操作先にしない。【R1】
-2. 「スタックアクション／Stack actions」→「更新ロールバックの続行／Continue update rollback」を選択する。【R2】
-3. 詳細オプションの「スキップするリソース」で、A-4の1件を入力・指定する。画面の形式がこの手順と異なる場合は、入力方法を確認してから進む。
-4. 既存の実行ロールを維持する。RoleARNの変更は今後の操作にも影響するため、この作業の便宜で変更しない。【R1】
-5. 操作先が親であること、スキップがRG1件だけであることを作業者・確認者で読み合わせる。
-6. 画面の内容を確認し、ロールバック続行を実行する。
+R12：CFNでのバックアップ復元元指定
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-elasticache-replicationgroup.html
+確認箇所：Properties → SnapshotName。新規RGへの復元と、更新時のReplacement。
