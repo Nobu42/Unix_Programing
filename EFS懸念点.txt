@@ -1,0 +1,56 @@
+■ EFSライフサイクル設定に伴う懸念点
+
+1. 想定どおりに費用が下がらない可能性
+・保管料は下がっても、アクセスや階層化に伴う料金が増える場合がある。
+・IA／Archiveでは、128KiB未満のファイルも128KiBとして課金されるため、小さいファイルが多い場合は削減効果を確認する必要がある。
+・Archiveは最低90日分の保管料がかかるため、短期間で削除・縮小するデータには注意が必要。
+
+2. アプリケーションやバッチの性能への影響
+・IA／ArchiveはStandardよりアクセス時の遅延が大きくなる。
+・Burstingモードでは、Standardの容量減少に伴い、ベースラインスループットが下がる可能性がある。
+・画面表示やバッチの処理時間に影響しないか確認が必要。
+
+3. 想定外のファイルへの適用
+・ライフサイクル設定はEFS全体に適用されるため、特定フォルダだけを対象外にはできない。
+・用途の異なるデータが同居している場合、性能を維持したいファイルも移行対象になる可能性がある。
+
+4. CloudFormation更新時の影響
+・ネスト構造でも設定できるが、対象EFSの子テンプレートを確認し、ルートスタックから更新する必要がある。
+・別の変更が混ざると、EFS以外のリソースにも更新が及ぶ可能性がある。
+・LifecyclePolicies単独の更新は「No interruption」だが、他のプロパティの変更は別途確認が必要。
+・特に、Archive利用のためにPerformanceModeを変更すると、EFSの置換が発生する。
+
+5. コンソール変更後のCloudFormationとの不一致
+・コンソールで変更しても、CloudFormationテンプレートには自動反映されない。
+・実設定とテンプレートが食い違い、後続の更新や保守時に設定を誤認するおそれがある。
+・親スタックのドリフト検出では、子スタック内のリソースまで確認できない。
+・テンプレートに明示していないプロパティは検出対象外のため、IN_SYNCだけでは一致を確認できない。
+
+6. 費用削減がすぐに表れない可能性
+・設定しても、移行対象のファイルが即時にすべて移行されるわけではない。
+・移行完了までの時間はファイル数・サイズ・負荷によって異なるため、設定直後の料金だけでは効果を判断できない。
+
+※ 上記はAWSの仕様から考えられる懸念点。
+   対象EFSで実際に該当するかは、構成と利用状況の確認が必要。
+
+
+■ AWS公式資料
+
+料金・最低課金サイズ・最低保存期間
+https://aws.amazon.com/jp/efs/pricing/
+https://aws.amazon.com/jp/efs/faq/
+
+性能・スループット
+https://docs.aws.amazon.com/ja_jp/efs/latest/ug/performance.html
+
+ライフサイクルの適用範囲・移行処理
+https://docs.aws.amazon.com/ja_jp/efs/latest/ug/lifecycle-management-efs.html
+
+CloudFormationの更新時の影響
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-efs-filesystem.html
+
+ネストされたスタックの更新
+https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/using-cfn-nested-stacks.html
+
+ドリフト検出の制限
+https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/using-cfn-stack-drift.html
