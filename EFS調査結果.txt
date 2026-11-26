@@ -1,38 +1,113 @@
 EFSライフサイクル設定 調査メモ
 
-■ 調査方針
-費用削減を目的に、以下を確認する。
-① ライフサイクル設定による懸念点
-② ネスト構造のCloudFormationでの設定方法と注意点
-③ Webコンソールでの設定方法と注意点
+■ 調査目的
+対象EFSにライフサイクルを設定できるか確認し、
+CloudFormation・コンソールでの設定方法と懸念点を整理する。
+設定変更は顧客承認後に実施する。
 
-今回は調査と設定案の整理まで。設定変更は顧客承認後に実施する。
 
-■ 1. ライフサイクル設定による懸念点
+1. 対象EFSの現在の設定
 
-【仕組み】
-・アクセスされていないファイルを、同じEFS内のIAやArchiveへ自動移行する。
-・S3への移動ではない。移行後も同じファイルパスで利用できる。
+確認する項目：
+・現在のライフサイクル設定
+・ファイルシステムの種類：Regional／One Zone
+・パフォーマンスモード：General Purpose／Max I/O
+・スループットモード：Bursting／Provisioned／Elastic
 
-【費用】
-・保管料だけでなく、アクセスや階層化に伴う料金を含めて判断する。
-・頻繁にアクセスするデータでは、想定した削減効果が出ない可能性がある。
-・IA／Archiveは、小さいファイルでも最低128KiBとして保管料が計算される。
-・Archiveは最低90日分の保管料が必要。90日未満で削除・縮小すると残期間分も課金される。
+確認方法：
+EFSコンソール → 対象ファイルシステム → 全般・設定情報を確認する。
 
-【性能】
-・IA／ArchiveはStandardよりアクセス時の遅延が大きくなる。
-・Burstingモードの場合、Standardの容量減少に伴ってベースラインスループットが下がる可能性がある。
-・利用しているアプリケーションやバッチの処理時間への影響を確認する。
-
-【設定条件・対象範囲】
-・ポリシーはEFS全体に適用される。特定フォルダだけを対象外にはできない。
-・ArchiveはRegional、Elasticスループット、General Purposeの構成が前提。
-・移行日数と、アクセス時にStandardへ戻すかどうかを決める。
-・設定後の移行は即時完了ではなく、容量やファイル数、負荷によって時間がかかる。
+確認事項：
+・ライフサイクルは未設定のようなので、実設定で確認する。
+・希望する移行先の利用条件に合っているか確認する。
+・Archiveを利用する場合は、Regional、Elastic、
+  General Purposeの構成が必要。
+・移行日数と、アクセス時にStandardへ戻すかは未決定。
 
 参考：
-ライフサイクル管理
+https://docs.aws.amazon.com/efs/latest/APIReference/API_PutLifecycleConfiguration.html
+
+
+2. CloudFormationでの変更箇所
+
+確認する項目：
+・対象EFSを定義しているテンプレートと論理ID
+・対象EFSの所属スタック、親スタック、ルートスタック
+・親から子テンプレートを参照するTemplateURLとパラメータ
+
+確認方法：
+CloudFormationコンソールで、対象EFSの物理IDを照合し、
+「リソース」「テンプレート」「パラメータ」を確認する。
+
+設定方法：
+・ネスト構造でも設定可能。
+・対象EFSのAWS::EFS::FileSystemにある
+  LifecyclePoliciesを追加・変更する。
+・更新は最上位のルートスタックから行う。
+
+注意点：
+・LifecyclePolicies単独の更新は「No interruption」。
+・他の設定やリソースの変更が混ざっていないか確認する。
+・PerformanceModeの変更はEFSの置換対象になるため、
+  Archive利用のために安易に変更しない。
+
+参考：
+ネストされたスタック
+https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/using-cfn-nested-stacks.html
+
+EFSの設定項目と更新時の影響
+https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-efs-filesystem.html
+
+
+3. コンソールでの設定手順と注意点
+
+設定手順：
+① 対象アカウント・リージョンを確認する。
+② EFS → ファイルシステム → 対象のFileSystemIdを選択する。
+③ 「全般」→「編集」→「ライフサイクル管理」を開く。
+④ 以下の設定を入力する。
+   ・IAへの移行日数
+   ・Archiveへの移行日数（利用する場合）
+   ・Standardへの復帰条件（なし／初回アクセス時）
+⑤ 内容を確認して保存する。
+⑥ 保存後、設定値を確認する。
+
+※ 今回の調査では設定を保存しない。
+
+注意点：
+・CloudFormation管理のEFSをコンソールで変更しても、
+  テンプレートには自動反映されない。
+・コンソールで変更する場合は、テンプレートへの反映方法も決める。
+
+参考：
+https://docs.aws.amazon.com/ja_jp/efs/latest/ug/enable-lifecycle-management.html
+https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/using-cfn-stack-drift.html
+
+
+4. ライフサイクル設定の主な懸念点
+
+・アクセス遅延
+  IA／ArchiveはStandardよりアクセス時の遅延が大きくなる。
+  利用するアプリやバッチで許容できるか確認する。
+
+・追加料金
+  保管料が下がっても、アクセスや階層化に伴う料金が発生する。
+  アクセス頻度によっては、想定した削減効果が出ない。
+  小さいファイルの最低課金サイズや、Archiveの最低90日分の
+  保管料にも注意する。
+
+・EFS全体への適用
+  ポリシーはファイルシステム全体に適用される。
+  特定フォルダだけを対象外にはできないため、
+  用途の異なるデータが同居していないか確認する。
+
+・スループットへの影響
+  Burstingの場合、Standard容量の減少に伴い、
+  ベースラインスループットが下がる可能性がある。
+  現在のモードと利用状況から、影響の有無を確認する。
+
+参考：
+ライフサイクルの適用範囲
 https://docs.aws.amazon.com/ja_jp/efs/latest/ug/lifecycle-management-efs.html
 
 料金・最低課金サイズ・最低保存期間
@@ -42,69 +117,10 @@ https://aws.amazon.com/jp/efs/faq/
 性能・スループット
 https://docs.aws.amazon.com/ja_jp/efs/latest/ug/performance.html
 
-Archiveの設定条件
-https://docs.aws.amazon.com/efs/latest/APIReference/API_PutLifecycleConfiguration.html
 
+■ 現時点の整理
+AWSの機能としては、ネストしたCloudFormationでも
+コンソールでもライフサイクルを設定できる。
 
-■ 2. ネスト構造のCloudFormationで設定できるか
-
-【確認結果】
-・ネスト構造でも設定可能。
-・対象EFSを定義しているテンプレートのLifecyclePoliciesを追加・変更する。
-・子スタックを直接更新せず、最上位のルートスタックから更新する。
-
-【事前に確認するもの】
-・対象EFSを管理する子スタックとテンプレート。
-・親テンプレートのTemplateURLとパラメータ。
-・実際の更新に使っている手順やパイプライン。
-
-【注意点】
-・LifecyclePoliciesの更新は、AWSの定義上「No interruption」。
-・ただし、移行後のアクセス性能への影響がないという意味ではない。
-・他の設定変更が混ざっていないか、変更差分を確認する。
-・特にPerformanceModeの変更はEFSの置換対象。Archiveを使うために安易に変更しない。
-・親子スタックへの影響と、更新失敗時の戻し方も確認する。
-
-参考：
-ネストされたスタックの更新
-https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/using-cfn-nested-stacks.html
-
-EFSのプロパティと更新時の影響
-https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-efs-filesystem.html
-
-
-■ 3. Webコンソールで設定する場合
-
-【操作手順】
-1. 対象アカウント・リージョンを確認する。
-2. EFS → ファイルシステム → 対象のFileSystemIdを選択する。
-3. 「全般」の「編集」を開く。
-4. 「ライフサイクル管理」で以下を設定する。
-   ・IAへの移行日数
-   ・Archiveへの移行日数（利用する場合）
-   ・Standardへの移行条件（なし／初回アクセス時）
-5. 設定内容を確認し、「変更を保存」する。
-6. 詳細画面またはCLIで、保存した設定を確認する。
-
-【注意点】
-・CloudFormation管理のEFSでもコンソールから変更は可能だが、テンプレートには自動反映されない。
-・コンソールで変更する場合は、テンプレート側との整合をどう取るか決めておく。
-・ドリフト検出は対象の子スタックで実施する。親スタックの検出だけでは子のリソースまで確認できない。
-・テンプレートに明示していないプロパティはドリフト検出の対象外なので、IN_SYNCだけで一致と判断しない。
-
-参考：
-コンソールでの設定手順
-https://docs.aws.amazon.com/ja_jp/efs/latest/ug/enable-lifecycle-management.html
-
-CloudFormationのドリフト検出と制限
-https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/using-cfn-stack-drift.html
-
-
-■ 現場で残っている確認
-・対象EFSの実設定と、管理しているCloudFormationの構成。
-・保存データのアクセス頻度と、処理時間への影響。
-・移行日数、IAのみかArchiveも使うか、Standardへの復帰条件。
-・実施方法をCloudFormation／コンソールのどちらにするか。
-
-AWSの機能としては両方の方法で設定可能。
-対象環境での具体的な設定案と費用削減効果は、上記を確認してから判断する。
+対象EFSの構成、変更箇所、該当する懸念点を確認したうえで、
+対象環境への設定可否と実施方法を報告する。
