@@ -1,36 +1,4 @@
-#!/usr/bin/env bash
-# ALB名の一覧を読み、所属するCloudFormationスタックとテンプレートを保存する。
-# AWS CLI v2でログイン済みの認証情報を利用する。必要コマンド: aws、jq。
-# 同じアカウント・リージョンのALBを1行に1台記載する（26台以上にも対応）。
-# AWSへの操作は取得のみ。失敗したALBは記録し、次のALBへ進む。
-# 使用例: bash export_alb_templates.sh alb_names.txt ap-northeast-1
-# 終了コード: 0=全件保存、1=未確認/失敗あり、2=準備・認証エラー。
-set -uo pipefail
-umask 077
-
-if [[ $# -ne 2 ]]; then
-  printf '使い方: bash %s ALB名一覧ファイル リージョン\n' "$0" >&2
-  exit 2
-fi
-alb_input=$1
-alb_region=$2
-[[ -r "$alb_input" ]] || { printf '入力ファイルを読めません。\n' >&2; exit 2; }
-for alb_tool in aws jq; do
-  command -v "$alb_tool" >/dev/null || { printf '%sが必要です。\n' "$alb_tool" >&2; exit 2; }
-done
-
-# 実行ごとに別フォルダを作り、既存の証跡を上書きしない。
-alb_output=$(mktemp -d "./alb_templates_$(date +%Y%m%d_%H%M%S)_XXXXXX") || exit 2
-alb_options=(--region "$alb_region" --output json --no-cli-pager --no-cli-auto-prompt)
-aws --version > "$alb_output/aws_version.txt" 2>&1
-printf 'Started=%s\nRegion=%s\nInput=%s\n' \
-  "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$alb_region" "$alb_input" > "$alb_output/run_info.txt"
-cp -- "$alb_input" "$alb_output/input_names.txt" || exit 2
-
-# 実行日時、コマンド、終了コードと、標準出力・標準エラーを分けて記録する。
-record_aws() {
-  local destination=$1 step=$2 rc
-  shift 2
+shift 2
   {
     printf '\n[%s] ' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
     printf '%q ' aws "${alb_options[@]}" "$@"
@@ -126,3 +94,44 @@ collect_alb() {
       ;;
     *) return 1 ;;
   esac
+  [[ -s "$alb_template" ]] || return 1
+  alb_status=OK
+  alb_detail="保存完了。取得時のスタック状態: $stack_state / リソース状態: $resource_state"
+}
+
+alb_total=0
+alb_failed=0
+while IFS= read -r alb_line || [[ -n $alb_line ]]; do
+  # WindowsのCRLF、UTF-8 BOM、前後の空白、空行・コメント行に対応する。
+  alb_line=${alb_line%$'\r'}
+  alb_line=${alb_line#$'\xef\xbb\xbf'}
+  alb_name="${alb_line#"${alb_line%%[![:space:]]*}"}"
+  alb_name="${alb_name%"${alb_name##*[![:space:]]}"}"
+  [[ -z $alb_name || $alb_name == \#* ]] && continue
+  alb_total=$((alb_total + 1))
+  printf -v alb_index '%03d' "$alb_total"
+  alb_dir="$alb_output/$alb_index"
+  mkdir "$alb_dir" || exit 2
+  alb_arn='' alb_stack='' alb_stack_name='' alb_logical_id='' alb_template=''
+  if [[ ! $alb_name =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,31}$ || $alb_name == *- ]]; then
+    alb_status=INVALID_NAME
+    alb_detail='ALB名の形式を確認。ARNではなく名前を1行に1台記載する。'
+    alb_failed=$((alb_failed + 1))
+  elif ! collect_alb; then
+    alb_failed=$((alb_failed + 1))
+  fi
+  jq -rn --arg name "$alb_name" --arg arn "$alb_arn" \
+    --arg stack_name "$alb_stack_name" --arg stack "$alb_stack" \
+    --arg logical "$alb_logical_id" --arg status "$alb_status" \
+    --arg template "$alb_template" --arg detail "$alb_detail" \
+    '[$name,$arn,$stack_name,$stack,$logical,$status,$template,$detail] | @tsv' \
+    >> "$alb_output/results.tsv" || exit 2
+  printf '[%s] %s: %s\n' "$alb_index" "$alb_name" "$alb_status"
+done < "$alb_input"
+
+printf 'Finished=%s\nTotal=%s\nFailedOrUnconfirmed=%s\n' \
+  "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$alb_total" "$alb_failed" >> "$alb_output/run_info.txt"
+printf '対象: %s件 / 保存成功: %s件 / 未確認・失敗: %s件\n結果: %s/results.tsv\n' \
+  "$alb_total" "$((alb_total - alb_failed))" "$alb_failed" "$alb_output"
+[[ $alb_total -gt 0 ]] || { printf 'ALB名がありません。\n' >&2; exit 2; }
+[[ $alb_failed -eq 0 ]]
