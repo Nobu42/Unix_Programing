@@ -1,0 +1,72 @@
+# EFSライフサイクル設定の調査用コマンド。すべて情報取得のみ。
+# ログイン済みの認証情報を使用する。
+# ap-northeast-1は対象リージョンに、各ID・ARNは実際の値に置き換える。
+
+# 1. 接続先アカウントと、使用しているユーザー／ロールを確認する。
+aws sts get-caller-identity \
+  --output json --no-cli-pager
+
+# 2. 対象EFSの構成を確認する。
+# PerformanceMode、ThroughputMode、AvailabilityZoneNameを確認する。
+# AvailabilityZoneNameはOne Zoneの場合に返される。
+aws efs describe-file-systems \
+  --file-system-id "対象のFileSystemId" \
+  --region ap-northeast-1 \
+  --output json --no-cli-pager
+
+# 3. 現在のライフサイクル設定を確認する。
+# 正常取得できてLifecyclePoliciesが[]なら未設定。
+aws efs describe-lifecycle-configuration \
+  --file-system-id "対象のFileSystemId" \
+  --region ap-northeast-1 \
+  --output json --no-cli-pager
+
+# 4. 対象EFSを管理しているCloudFormationスタックを特定する。
+# StackIdを確認する。取得エラーだけで管理外とは判断しない。
+aws cloudformation describe-stack-resources \
+  --physical-resource-id "対象のFileSystemId" \
+  --region ap-northeast-1 \
+  --output json --no-cli-pager
+
+# 5. 所属スタックの親子関係と現在の状態を確認する。
+# ParentId＝直接の親、RootId＝最上位のルート。
+# StackStatus、Parameters、RoleARNも確認する。
+aws cloudformation describe-stacks \
+  --stack-name "4で確認したStackId" \
+  --region ap-northeast-1 \
+  --output json --no-cli-pager
+
+# 6. スタック内のリソース一覧を取得する。
+# 対象EFSのPhysicalResourceIdとLogicalResourceIdを照合する。
+# 4には最大100件の制限があるため、詳細な照合はこちらを使用する。
+aws cloudformation list-stack-resources \
+  --stack-name "4で確認したStackId" \
+  --region ap-northeast-1 \
+  --output json --no-cli-pager
+
+# 7. AWSに登録されている元テンプレートを取得する。
+# 対象EFSの定義とLifecyclePoliciesの記載を確認する。
+aws cloudformation get-template \
+  --stack-name "4で確認したStackId" \
+  --template-stage Original \
+  --region ap-northeast-1 \
+  --output json --no-cli-pager
+
+# 8. 親スタックがある場合、その構成とテンプレートを取得する。
+# 親テンプレート内の対象子スタックのTemplateURL・Parametersを確認する。
+# さらに親がある場合は、取得したParentIdに置き換えてルートまで繰り返す。
+aws cloudformation describe-stacks \
+  --stack-name "5で確認したParentId" \
+  --region ap-northeast-1 \
+  --output json --no-cli-pager
+
+aws cloudformation list-stack-resources \
+  --stack-name "5で確認したParentId" \
+  --region ap-northeast-1 \
+  --output json --no-cli-pager
+
+aws cloudformation get-template \
+  --stack-name "5で確認したParentId" \
+  --template-stage Original \
+  --region ap-northeast-1 \
+  --output json --no-cli-pager
